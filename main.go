@@ -17,10 +17,11 @@ import (
 var jwtKey = []byte("your_secret_key_2025")
 
 type User struct {
-	ID       string `json:"id"`
-	Email    string `json:"email"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	Username  string `json:"username"`
+	Password  string `json:"password"`
+	AvatarURL string `json:"avatar_url"` // ✨ เพิ่มเพื่อรองรับรูปโปรไฟล์
 }
 
 type RequestBody struct {
@@ -32,6 +33,7 @@ type RequestBody struct {
 	ReceiverEmail string `json:"receiver_email"`
 	TimeStart     string `json:"time_start"`
 	TimeEnd       string `json:"time_end"`
+	ImageURL      string `json:"image_url"` // ✨ เพิ่มเพื่อรองรับรูปแนบในคำขอ
 }
 
 type Event struct {
@@ -42,6 +44,7 @@ type Event struct {
 	CreatedBy   string   `json:"created_by"`
 	VisibleTo   []string `json:"visible_to"`
 	RepeatType  string   `json:"repeat_type"`
+	ImageURL    string   `json:"image_url"` // ✨ เพิ่มเพื่อรองรับรูปในปฏิทิน
 }
 
 func enableCORS(w *http.ResponseWriter, r *http.Request) bool {
@@ -65,13 +68,11 @@ func sendDiscord(content string) {
 	http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
 }
 
-// ✨ ปรับปรุงให้แสดงเวลาไทย + วินาทีให้ตรงตามหน้าเว็บ
 func formatDisplayTime(t string) string {
 	parsedTime, err := time.Parse(time.RFC3339, t)
 	if err != nil {
 		return t
 	}
-	// บวก 7 ชั่วโมงให้เป็นเวลาไทย
 	thailandTime := parsedTime.Add(7 * time.Hour)
 	return thailandTime.Format("2006-01-02 TIME 15:04:05")
 }
@@ -99,7 +100,13 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"user_id": users[0]["id"], "username": users[0]["username"], "exp": time.Now().Add(time.Hour * 72).Unix()})
 	tokenString, _ := token.SignedString(jwtKey)
-	json.NewEncoder(w).Encode(map[string]string{"token": tokenString, "username": users[0]["username"].(string), "user_id": users[0]["id"].(string), "email": users[0]["email"].(string)})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"token":      tokenString,
+		"username":   users[0]["username"].(string),
+		"user_id":    users[0]["id"].(string),
+		"email":      users[0]["email"].(string),
+		"avatar_url": users[0]["avatar_url"], // ✨ ส่งรูปโปรไฟล์กลับไปตอน Login
+	})
 }
 
 func handleGetAllUsers(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +115,7 @@ func handleGetAllUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var users []map[string]interface{}
-	client.From("users").Select("id, email, username", "exact", false).ExecuteTo(&users)
+	client.From("users").Select("id, email, username, avatar_url", "exact", false).ExecuteTo(&users)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
 }
@@ -133,7 +140,13 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rName := receiver[0]["username"].(string)
-	row := map[string]interface{}{"category": req.Header, "title": req.Title, "description": req.Duration, "sender_id": req.SenderID, "receiver_id": receiver[0]["id"].(string), "status": "pending", "sender_name": sName, "receiver_name": rName, "remark": fmt.Sprintf("%s|%s", req.TimeStart, req.TimeEnd)}
+	row := map[string]interface{}{
+		"category": req.Header, "title": req.Title, "description": req.Duration,
+		"sender_id": req.SenderID, "receiver_id": receiver[0]["id"].(string),
+		"status": "pending", "sender_name": sName, "receiver_name": rName,
+		"remark":    fmt.Sprintf("%s|%s", req.TimeStart, req.TimeEnd),
+		"image_url": req.ImageURL, // ✨ เก็บลิงก์รูปแนบ
+	}
 	client.From("requests").Insert(row, false, "", "", "").Execute()
 	go func() {
 		msg := fmt.Sprintf("--------------------------------------------------\n@everyone มีคำขอใหม่ส่งถึงคุณ!\nหัวข้อ: %s\nจาก: %s\nถึง: %s\nรายละเอียด: %s\nเริ่ม: %s\nจบ: %s\nLink: https://lover-frontend-ashen.vercel.app/", req.Header, sName, rName, req.Title, formatDisplayTime(req.TimeStart), formatDisplayTime(req.TimeEnd))
@@ -192,16 +205,24 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	var ev Event
 	json.NewDecoder(r.Body).Decode(&ev)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-	row := map[string]interface{}{"event_date": ev.EventDate, "title": ev.Title, "description": ev.Description, "repeat_type": ev.RepeatType}
+
+	row := map[string]interface{}{
+		"event_date":  ev.EventDate,
+		"title":       ev.Title,
+		"description": ev.Description,
+		"repeat_type": ev.RepeatType,
+		"image_url":   ev.ImageURL, // ✨ เก็บลิงก์รูปภาพในปฏิทิน
+	}
+
 	if ev.CreatedBy != "" {
 		row["created_by"] = ev.CreatedBy
 	}
 	if len(ev.VisibleTo) > 0 {
 		row["visible_to"] = ev.VisibleTo
-	} else {
-		row["visible_to"] = []string{}
 	}
+
 	client.From("events").Insert(row, false, "", "", "").Execute()
+
 	go func() {
 		creator := "ใครบางคน"
 		var sender []map[string]interface{}
@@ -239,39 +260,23 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// ✨ ระบบแจ้งเตือนอัตโนมัติแบบแม่นยำวินาที
 func handleCronRemind(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-
-	// 🕒 1. ดึงเวลาปัจจุบัน (UTC) และปัดวินาที/มิลลิวินาทีให้เป็น 00:00.000 เป๊ะๆ
-	// ตัวอย่าง: ถ้า Cron เรียกมาตอน 17:50:05 มันจะถูกปัดเป็น 17:50:00.000
 	now := time.Now().UTC().Truncate(time.Minute)
 	targetTime := now.Format("2006-01-02T15:04:00.000Z")
-
 	fmt.Printf("🎯 กำลังตรวจสอบรายการที่ตรงกับเวลา: %s\n", targetTime)
-
 	var results []map[string]interface{}
-	// 🔍 2. ค้นหาแบบ "เท่ากับ (Eq)" เฉพาะรายการที่นัดไว้ที่วินาทีที่ 00 นี้เท่านั้น
-	// วิธีนี้จะทำให้รายการในนาทีอื่นๆ (เช่น 17:49 หรือ 17:51) ไม่ถูกดึงออกมา
-	_, err := client.From("events").
-		Select("*", "exact", false).
-		Eq("event_date", targetTime).
-		ExecuteTo(&results)
-
+	_, err := client.From("events").Select("*", "exact", false).Eq("event_date", targetTime).ExecuteTo(&results)
 	if err != nil {
 		fmt.Printf("❌ Database Error: %v\n", err)
 		return
 	}
-
-	fmt.Printf("📊 Result: Found %d events for this specific minute\n", len(results))
-
 	if len(results) > 0 {
 		for _, ev := range results {
-			msg := fmt.Sprintf("--------------------------------------------------\n🔔 **แจ้งเตือนวันสำคัญ!**\n📌 หัวข้อ: %v\n⏰ เวลา: %s\nLink: https://lover-frontend-ashen.vercel.app/",
-				ev["title"], formatDisplayTime(ev["event_date"].(string)))
+			msg := fmt.Sprintf("--------------------------------------------------\n🔔 **แจ้งเตือนวันสำคัญ!**\n📌 หัวข้อ: %v\n⏰ เวลา: %s\nLink: https://lover-frontend-ashen.vercel.app/", ev["title"], formatDisplayTime(ev["event_date"].(string)))
 			sendDiscord(msg)
 		}
 	}
