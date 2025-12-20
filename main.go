@@ -246,22 +246,28 @@ func handleCronRemind(w http.ResponseWriter, r *http.Request) {
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
-	// 🕒 ดึงเวลาปัจจุบัน UTC และปัดให้เหลือแค่นาที (วินาทีจะเป็น 00)
+	// 🕒 1. ปรับเวลาปัจจุบันให้เป็นนาทีถ้วน (วินาทีและมิลลิวินาทีเป็น 0)
 	now := time.Now().UTC().Truncate(time.Minute)
 	targetTime := now.Format("2006-01-02T15:04:00.000Z")
 
-	fmt.Printf("🎯 Cron Calling: %s\n", targetTime)
+	// พิมพ์ Log เพื่อดูว่าเรากำลังหาเวลาไหน (ต้องขึ้นในหน้า Render Logs)
+	fmt.Printf("🎯 Checking DB for time: %s\n", targetTime)
 
 	var results []map[string]interface{}
-	// ค้นหาแบบเป๊ะๆ ที่วินาที 00 ของนาทีนี้
-	_, err := client.From("events").
-		Select("*", "exact", false).
-		Eq("event_date", targetTime).
-		ExecuteTo(&results)
+	// 🔍 2. ค้นหาแบบเป๊ะๆ ที่วินาที 00
+	_, err := client.From("events").Select("*", "exact", false).Eq("event_date", targetTime).ExecuteTo(&results)
 
-	if err == nil && len(results) > 0 {
+	if err != nil {
+		fmt.Printf("❌ Database Error: %v\n", err)
+		return
+	}
+
+	// 🕒 3. แสดงจำนวนที่เจอใน Log
+	fmt.Printf("📊 Result: Found %d events to remind\n", len(results))
+
+	if len(results) > 0 {
 		for _, ev := range results {
-			msg := fmt.Sprintf("--------------------------------------------------\n🔔 **แจ้งเตือนวันสำคัญ!**\n📌 หัวข้อ: %v\n⏰ เวลา: %s",
+			msg := fmt.Sprintf("--------------------------------------------------\n🔔 **ถึงเวลาของวันสำคัญแล้ว!**\n📌 หัวข้อ: %v\n⏰ เวลา: %s\nLink: https://lover-frontend-ashen.vercel.app/",
 				ev["title"], formatDisplayTime(ev["event_date"].(string)))
 			sendDiscord(msg)
 		}
