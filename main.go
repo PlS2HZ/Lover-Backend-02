@@ -246,19 +246,23 @@ func handleCronRemind(w http.ResponseWriter, r *http.Request) {
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
-	// 🕒 1. สร้างช่วงเวลา "นาทีปัจจุบัน" ให้ครอบคลุมตั้งแต่วินาทีที่ 0.000 ถึง 59.999
-	now := time.Now().UTC()
-	startTime := now.Truncate(time.Minute).Format("2006-01-02T15:04:00.000Z")
-	// ขยายไปจนถึงเกือบนาทีถัดไป เพื่อดึงรายการที่มีเศษมิลลิวินาทีออกมาให้หมด
-	endTime := now.Truncate(time.Minute).Add(time.Second * 59).Add(time.Millisecond * 999).Format("2006-01-02T15:04:05.999Z")
+	// 🕒 1. ดึงเวลาปัจจุบัน และปัดเศษให้เหลือแค่นาที (วินาทีเป็น 00)
+	now := time.Now().UTC().Truncate(time.Minute)
 
-	fmt.Printf("🎯 Checking between: %s and %s\n", startTime, endTime)
+	// 2. สร้างช่วงเวลาที่ครอบคลุม 1 นาทีเต็มๆ (วินาทีที่ 0 ถึง 59)
+	// ใช้ RFC3339 เพื่อให้ Supabase เข้าใจ Timezone ได้ถูกต้องที่สุด
+	startTime := now.Format(time.RFC3339)                    // เช่น 17:50:00Z
+	endTime := now.Add(1 * time.Minute).Format(time.RFC3339) // เช่น 17:51:00Z
+
+	fmt.Printf("🎯 ช่วงเวลาที่เช็ค: %s ถึง %s\n", startTime, endTime)
 
 	var results []map[string]interface{}
-	// 🔍 2. ใช้ Gte และ Lte กวาดข้อมูลในช่วงนาทีนี้ทั้งหมด
-	_, err := client.From("events").Select("*", "exact", false).
+	// 🔍 3. ใช้ Gte (มากกว่าเท่ากับ) และ Lt (น้อยกว่า)
+	// วิธีนี้จะกวาดเอาทุกรายการที่มีวินาทีตั้งแต่ 00.000 จนถึง 59.9999 มาหมดครับ
+	_, err := client.From("events").
+		Select("*", "exact", false).
 		Gte("event_date", startTime).
-		Lte("event_date", endTime).
+		Lt("event_date", endTime).
 		ExecuteTo(&results)
 
 	if err != nil {
@@ -266,6 +270,7 @@ func handleCronRemind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 📊 4. แสดงผลลัพธ์ใน Log
 	fmt.Printf("📊 Result: Found %d events to remind\n", len(results))
 
 	if len(results) > 0 {
