@@ -246,23 +246,27 @@ func handleCronRemind(w http.ResponseWriter, r *http.Request) {
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
-	// 🕒 1. ปรับเวลาปัจจุบันให้เป็นนาทีถ้วน (วินาทีและมิลลิวินาทีเป็น 0)
-	now := time.Now().UTC().Truncate(time.Minute)
-	targetTime := now.Format("2006-01-02T15:04:00.000Z")
+	// 🕒 1. ดึงเวลาปัจจุบัน และสร้างช่วงเวลา "นาทีนี้ทั้งนาที"
+	now := time.Now().UTC()
+	// เริ่มที่วินาที 00.000
+	startTime := now.Truncate(time.Minute).Format("2006-01-02T15:04:00.000Z")
+	// จบที่วินาที 59.999
+	endTime := now.Truncate(time.Minute).Add(59 * time.Second).Format("2006-01-02T15:04:59.999Z")
 
-	// พิมพ์ Log เพื่อดูว่าเรากำลังหาเวลาไหน (ต้องขึ้นในหน้า Render Logs)
-	fmt.Printf("🎯 Checking DB for time: %s\n", targetTime)
+	fmt.Printf("🎯 Checking between: %s and %s\n", startTime, endTime)
 
 	var results []map[string]interface{}
-	// 🔍 2. ค้นหาแบบเป๊ะๆ ที่วินาที 00
-	_, err := client.From("events").Select("*", "exact", false).Eq("event_date", targetTime).ExecuteTo(&results)
+	// 🔍 2. เปลี่ยนจาก Eq เป็น Gte (>=) และ Lte (<=) เพื่อกวาดทั้งนาที
+	_, err := client.From("events").Select("*", "exact", false).
+		Gte("event_date", startTime).
+		Lte("event_date", endTime).
+		ExecuteTo(&results)
 
 	if err != nil {
 		fmt.Printf("❌ Database Error: %v\n", err)
 		return
 	}
 
-	// 🕒 3. แสดงจำนวนที่เจอใน Log
 	fmt.Printf("📊 Result: Found %d events to remind\n", len(results))
 
 	if len(results) > 0 {
