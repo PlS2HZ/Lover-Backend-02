@@ -39,14 +39,15 @@ type RequestBody struct {
 }
 
 type Event struct {
-	ID          string   `json:"id,omitempty"`
-	EventDate   string   `json:"event_date"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	CreatedBy   string   `json:"created_by"`
-	VisibleTo   []string `json:"visible_to"`
-	RepeatType  string   `json:"repeat_type"`
-	IsSpecial   bool     `json:"is_special"` // ✅ สำหรับดึงวันสำคัญไปโชว์หน้า Home
+	ID           string   `json:"id,omitempty"`
+	EventDate    string   `json:"event_date"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	CreatedBy    string   `json:"created_by"`
+	VisibleTo    []string `json:"visible_to"`
+	RepeatType   string   `json:"repeat_type"`
+	IsSpecial    bool     `json:"is_special"` // ✅ สำหรับดึงวันสำคัญไปโชว์หน้า Home
+	CategoryType string   `json:"category_type"`
 }
 
 func enableCORS(w *http.ResponseWriter, r *http.Request) bool {
@@ -261,11 +262,12 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
 	row := map[string]interface{}{
-		"event_date":  ev.EventDate,
-		"title":       ev.Title,
-		"description": ev.Description,
-		"repeat_type": ev.RepeatType,
-		"is_special":  true, // บังคับให้เป็น true
+		"event_date":    ev.EventDate,
+		"title":         ev.Title,
+		"description":   ev.Description,
+		"repeat_type":   ev.RepeatType,
+		"is_special":    true, // บังคับให้เป็น true
+		"category_type": ev.CategoryType,
 	}
 	if ev.CreatedBy != "" {
 		row["created_by"] = ev.CreatedBy
