@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
+	"github.com/supabase-community/postgrest-go" // ✨ เพิ่มอันนี้เพื่อให้ใช้ OrderOpts ได้
 	"github.com/supabase-community/supabase-go"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -45,19 +46,14 @@ type Event struct {
 	CreatedBy   string   `json:"created_by"`
 	VisibleTo   []string `json:"visible_to"`
 	RepeatType  string   `json:"repeat_type"`
+	IsSpecial   bool     `json:"is_special"` // ✅ สำหรับดึงวันสำคัญไปโชว์หน้า Home
 }
 
 func enableCORS(w *http.ResponseWriter, r *http.Request) bool {
-	// 1. อนุญาต Origin (Vercel)
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
-
-	// 2. ✅ เพิ่ม "PATCH" ลงในรายการนี้ (ของเดิมน่าจะมีแค่ GET, POST)
 	(*w).Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
-
-	// 3. อนุญาต Headers
 	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-	// 4. จัดการคำขอ Preflight (OPTIONS) ที่นายเจอใน Console
 	if r.Method == "OPTIONS" {
 		(*w).WriteHeader(http.StatusOK)
 		return true
@@ -84,16 +80,12 @@ func formatDisplayTime(t string) string {
 	return thailandTime.Format("2006-01-02 เวลา 15:04:05")
 }
 
-// ✨ ระบบตรวจสอบและแจ้งเตือนวันสำคัญ (Background Job)
 func checkAndNotify() {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-
-	// ใช้เวลาปัจจุบันในรูปแบบ UTC และตัดวินาทีออกเพื่อให้ตรงกับฐานข้อมูล
 	now := time.Now().UTC().Truncate(time.Minute)
 	targetTime := now.Format("2006-01-02T15:04:00.000Z")
 
 	var results []map[string]interface{}
-	// ✅ แก้ไขบรรทัดที่มีปัญหาเรื่องจำนวน Return values
 	_, err := client.From("events").Select("*", "exact", false).Eq("event_date", targetTime).ExecuteTo(&results)
 
 	if err != nil {
@@ -169,10 +161,7 @@ func handleGetAllUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var users []map[string]interface{}
-
-	// ✅ ต้องดึง description และ gender ออกมาด้วย!
 	client.From("users").Select("id, username, avatar_url, description, gender", "exact", false).ExecuteTo(&users)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
 }
@@ -186,10 +175,8 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var sender []map[string]interface{}
 	client.From("users").Select("username", "exact", false).Eq("id", req.SenderID).ExecuteTo(&sender)
-	sName := "Unknown"
-	if len(sender) > 0 {
-		sName = sender[0]["username"].(string)
-	}
+	sName := sender[0]["username"].(string)
+
 	var receiver []map[string]interface{}
 	client.From("users").Select("id, username", "exact", false).Eq("username", req.ReceiverUsername).ExecuteTo(&receiver)
 	if len(receiver) == 0 {
@@ -197,30 +184,26 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rName := receiver[0]["username"].(string)
+
 	row := map[string]interface{}{
-		"category": req.Header, "title": req.Title, "description": req.Duration,
-		"sender_id": req.SenderID, "receiver_id": receiver[0]["id"].(string),
-		"status": "pending", "sender_name": sName, "receiver_name": rName,
-		"remark": fmt.Sprintf("%s|%s", req.TimeStart, req.TimeEnd), "image_url": req.ImageURL,
+		"category":      req.Header,
+		"title":         req.Title,
+		"description":   req.Duration,
+		"sender_id":     req.SenderID,
+		"receiver_id":   receiver[0]["id"].(string),
+		"status":        "pending",
+		"sender_name":   sName,
+		"receiver_name": rName,
+		"remark":        fmt.Sprintf("%s|%s", req.TimeStart, req.TimeEnd),
+		"image_url":     req.ImageURL,
 	}
 	client.From("requests").Insert(row, false, "", "", "").Execute()
+
 	go func() {
-		msg := fmt.Sprintf("--------------------------------------------------\n@everyone มีคำขอใหม่ส่งถึงคุณ!\nหัวข้อ: %s\nจาก: %s\nถึง: %s\nรายละเอียด: %s\nเริ่ม: %s\nจบ: %s\nLink: https://lover-frontend-ashen.vercel.app/", req.Header, sName, rName, req.Title, formatDisplayTime(req.TimeStart), formatDisplayTime(req.TimeEnd))
+		msg := fmt.Sprintf("--------------------------------------------------\n@everyone มีคำขอใหม่ส่งถึงคุณ!\nหัวข้อ: %s\nจาก: %s\nถึง: %s\nเริ่ม: %s\nจบ: %s\nLink: https://lover-frontend-ashen.vercel.app/", req.Header, sName, rName, formatDisplayTime(req.TimeStart), formatDisplayTime(req.TimeEnd))
 		sendDiscord(msg)
 	}()
 	w.WriteHeader(http.StatusCreated)
-}
-
-func handleGetMyRequests(w http.ResponseWriter, r *http.Request) {
-	if enableCORS(&w, r) {
-		return
-	}
-	uID := r.URL.Query().Get("user_id")
-	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-	var data []map[string]interface{}
-	client.From("requests").Select("*", "exact", false).Or(fmt.Sprintf("sender_id.eq.%s,receiver_id.eq.%s", uID, uID), "").ExecuteTo(&data)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
 }
 
 func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
@@ -234,20 +217,23 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-	updateData := map[string]interface{}{"status": body.Status, "processed_at": time.Now().Format(time.RFC3339), "comment": body.Comment}
+	updateData := map[string]interface{}{
+		"status":       body.Status,
+		"processed_at": time.Now().Format(time.RFC3339),
+		"comment":      body.Comment,
+	}
 	client.From("requests").Update(updateData, "", "").Eq("id", body.ID).Execute()
+
 	go func() {
 		var results []map[string]interface{}
 		client.From("requests").Select("*", "exact", false).Eq("id", body.ID).ExecuteTo(&results)
 		if len(results) > 0 {
 			item := results[0]
 			statusText := "อนุมัติ"
-			reasonLine := ""
 			if body.Status == "rejected" {
-				statusText = "ไม่นุมัติ"
-				reasonLine = fmt.Sprintf("\nเหตุผลไม่อนุมัติ: %s", body.Comment)
+				statusText = "ไม่อนุมัติ"
 			}
-			msg := fmt.Sprintf("--------------------------------------------------\n@everyone\nผลการพิจารณาคำขอ!สถานะ: %s\nจาก: %v\nถึง: %v\nหัวข้อ: %v\nรายละเอียด: %v%s\nLink: https://lover-frontend-ashen.vercel.app/", statusText, item["sender_name"], item["receiver_name"], item["category"], item["title"], reasonLine)
+			msg := fmt.Sprintf("--------------------------------------------------\n@everyone ผลการพิจารณาคำขอ!\nสถานะ: %s\nจาก: %v\nถึง: %v\nหัวข้อ: %v\nLink: https://lover-frontend-ashen.vercel.app/", statusText, item["sender_name"], item["receiver_name"], item["category"])
 			sendDiscord(msg)
 		}
 	}()
@@ -262,7 +248,11 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&ev)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	row := map[string]interface{}{
-		"event_date": ev.EventDate, "title": ev.Title, "description": ev.Description, "repeat_type": ev.RepeatType,
+		"event_date":  ev.EventDate,
+		"title":       ev.Title,
+		"description": ev.Description,
+		"repeat_type": ev.RepeatType,
+		"is_special":  ev.IsSpecial, // บันทึกค่าว่าเป็นวันสำคัญ
 	}
 	if ev.CreatedBy != "" {
 		row["created_by"] = ev.CreatedBy
@@ -271,17 +261,26 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 		row["visible_to"] = ev.VisibleTo
 	}
 	client.From("events").Insert(row, false, "", "", "").Execute()
-	go func() {
-		creator := "ใครบางคน"
-		var sender []map[string]interface{}
-		client.From("users").Select("username", "exact", false).Eq("id", ev.CreatedBy).ExecuteTo(&sender)
-		if len(sender) > 0 {
-			creator = sender[0]["username"].(string)
-		}
-		msg := fmt.Sprintf("--------------------------------------------------\n✨ **บันทึกวันสำคัญใหม่!**\nหัวข้อ: %s\nวันที่: %s\nคนบันทึก: %s\nวนซ้ำ: %s\nLink: https://lover-frontend-ashen.vercel.app/", ev.Title, formatDisplayTime(ev.EventDate), creator, ev.RepeatType)
-		sendDiscord(msg)
-	}()
 	w.WriteHeader(http.StatusCreated)
+}
+
+func handleGetMyRequests(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	uID := r.URL.Query().Get("user_id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var data []map[string]interface{}
+
+	// ✅ แก้ไข: ใช้ postgrest.OrderOpts ตามที่ Compiler ต้องการ
+	client.From("requests").
+		Select("*", "exact", false).
+		Or(fmt.Sprintf("sender_id.eq.%s,receiver_id.eq.%s", uID, uID), "").
+		Order("created_at", &postgrest.OrderOpts{Ascending: false}).
+		ExecuteTo(&data)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
 }
 
 func handleGetMyEvents(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +291,34 @@ func handleGetMyEvents(w http.ResponseWriter, r *http.Request) {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var data []map[string]interface{}
 	filter := fmt.Sprintf("created_by.eq.%s,visible_to.cs.{%s}", uID, uID)
-	client.From("events").Select("*", "exact", false).Or(filter, "").ExecuteTo(&data)
+
+	// ✅ แก้ไข: เรียงตามวันที่จัดงาน (Ascending: true)
+	client.From("events").
+		Select("*", "exact", false).
+		Or(filter, "").
+		Order("event_date", &postgrest.OrderOpts{Ascending: true}).
+		ExecuteTo(&data)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
+}
+
+func handleGetHighlights(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	uID := r.URL.Query().Get("user_id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var data []map[string]interface{}
+	filter := fmt.Sprintf("is_special.eq.true,and(or(created_by.eq.%s,visible_to.cs.{%s}))", uID, uID)
+
+	// ✅ แก้ไข: เรียงวันสำคัญตามลำดับเวลา
+	client.From("events").
+		Select("*", "exact", false).
+		Or(filter, "").
+		Order("event_date", &postgrest.OrderOpts{Ascending: true}).
+		ExecuteTo(&data)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
 }
@@ -301,18 +327,9 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
-	id, title := r.URL.Query().Get("id"), r.URL.Query().Get("title")
+	id := r.URL.Query().Get("id")
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	client.From("events").Delete("", "").Eq("id", id).Execute()
-	go sendDiscord(fmt.Sprintf("--------------------------------------------------\n🗑️ **ลบวันพิเศษแล้ว**\nหัวข้อ: %s\nสถานะ: รายการถูกนำออกแล้ว\n--------------------------------------------------", title))
-	w.WriteHeader(http.StatusOK)
-}
-
-func handleCronRemind(w http.ResponseWriter, r *http.Request) {
-	if enableCORS(&w, r) {
-		return
-	}
-	checkAndNotify()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -320,12 +337,11 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
-
 	var body struct {
 		ID              string `json:"id"`
 		Username        string `json:"username"`
-		Description     string `json:"description"` // ✨ ต้องมี json:"description"
-		Gender          string `json:"gender"`      // ✨ ต้องมี json:"gender"
+		Description     string `json:"description"`
+		Gender          string `json:"gender"`
 		AvatarURL       string `json:"avatar_url"`
 		ConfirmPassword string `json:"confirm_password"`
 	}
@@ -335,7 +351,6 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	var users []map[string]interface{}
 	client.From("users").Select("*", "exact", false).Eq("id", body.ID).ExecuteTo(&users)
 
-	// ✅ ตรวจสอบว่ามีการเปลี่ยนชื่อจริงหรือไม่ ถ้าเปลี่ยนต้องเช็ครหัสผ่าน
 	if len(users) > 0 && body.Username != users[0]["username"].(string) {
 		if err := bcrypt.CompareHashAndPassword([]byte(users[0]["password"].(string)), []byte(body.ConfirmPassword)); err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -343,19 +358,13 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ✅ มั่นใจว่าข้อมูลทุกช่องถูกส่งไปบันทึก
 	updateData := map[string]interface{}{
 		"username":    body.Username,
 		"description": body.Description,
 		"gender":      body.Gender,
 		"avatar_url":  body.AvatarURL,
 	}
-
-	_, _, err := client.From("users").Update(updateData, "", "").Eq("id", body.ID).Execute()
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
+	client.From("users").Update(updateData, "", "").Eq("id", body.ID).Execute()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -372,7 +381,7 @@ func main() {
 	http.HandleFunc("/api/events", handleGetMyEvents)
 	http.HandleFunc("/api/events/create", handleCreateEvent)
 	http.HandleFunc("/api/events/delete", handleDeleteEvent)
-	http.HandleFunc("/api/cron/remind", handleCronRemind)
+	http.HandleFunc("/api/highlights", handleGetHighlights)
 	http.HandleFunc("/api/users/update", handleUpdateProfile)
 
 	port := os.Getenv("PORT")
