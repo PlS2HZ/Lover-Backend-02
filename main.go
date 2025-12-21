@@ -48,11 +48,15 @@ type Event struct {
 }
 
 func enableCORS(w *http.ResponseWriter, r *http.Request) bool {
-	// 💡 เปลี่ยนจาก "*" เป็นการอนุญาตแบบระบุ Origin หรือตรวจสอบ Request Origin
+	// อนุญาตให้เข้าถึงจากทุกที่ (หรือระบุเป็น domain ของ vercel ก็ได้)
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
-	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+
+	// ✅ เพิ่ม "PATCH" เข้าไปในรายการ Methods ที่อนุญาต
+	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE, PATCH")
+
 	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
+	// จัดการ Preflight Request
 	if r.Method == "OPTIONS" {
 		(*w).WriteHeader(http.StatusOK)
 		return true
