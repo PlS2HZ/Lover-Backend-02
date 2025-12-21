@@ -210,14 +210,28 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rID := users[0]["id"].(string)
+	rName := users[0]["username"].(string)
+
 	row := map[string]interface{}{
 		"category": req.Header, "title": req.Title, "description": req.Duration,
 		"sender_id": req.SenderID, "receiver_id": rID, "status": "pending",
-		"sender_name": "Someone", "receiver_name": users[0]["username"].(string),
+		"sender_name": "Someone", "receiver_name": rName,
 		"remark": fmt.Sprintf("%s|%s", req.TimeStart, req.TimeEnd), "image_url": req.ImageURL,
 	}
 	client.From("requests").Insert(row, false, "", "", "").Execute()
-	go triggerPushNotification(rID, "📢 มีคำขอใหม่!", "เปิดแอปเพื่อดูรายละเอียดนะ ❤️")
+
+	// ✅ กลับมาส่ง Discord Embed เหมือนเดิมแล้วครับ
+	go func() {
+		fields := []map[string]interface{}{
+			{"name": "👤 ถึง", "value": rName, "inline": true},
+			{"name": "⏰ เริ่ม", "value": formatDisplayTime(req.TimeStart), "inline": false},
+		}
+		sendDiscordEmbed("📢 มีคำขอใหม่ส่งถึงคุณ!", "หัวข้อ: "+req.Header, 16737920, fields, req.ImageURL)
+
+		// และส่งเข้ามือถือด้วย
+		triggerPushNotification(rID, "📢 มีคำขอใหม่!", "แฟนส่งคำขอ '"+req.Header+"' มาให้จ้า ❤️")
+	}()
+
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -236,8 +250,26 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 	var results []map[string]interface{}
 	client.From("requests").Select("*", "exact", false).Eq("id", body.ID).ExecuteTo(&results)
+
 	if len(results) > 0 {
-		go triggerPushNotification(results[0]["sender_id"].(string), "✅ คำขอมีการตอบกลับ", "แฟนพิจารณาคำขอของคุณแล้วจ้า")
+		item := results[0]
+		go func() {
+			// ✅ กลับมาส่ง Discord Embed เมื่ออนุมัติ/ปฏิเสธ
+			color := 3066993 // Green
+			statusTitle := "✅ อนุมัติคำขอแล้ว!"
+			if body.Status == "rejected" {
+				color = 15158332 // Red
+				statusTitle = "❌ ปฏิเสธคำขอ"
+			}
+			fields := []map[string]interface{}{
+				{"name": "📌 หัวข้อ", "value": fmt.Sprintf("%v", item["category"]), "inline": false},
+				{"name": "💬 เหตุผล", "value": body.Comment, "inline": false},
+			}
+			sendDiscordEmbed(statusTitle, "มีอัปเดตสถานะคำขอของคุณ", color, fields, "")
+
+			// และส่งเข้ามือถือด้วย
+			triggerPushNotification(item["sender_id"].(string), statusTitle, "แฟนพิจารณาคำขอ '"+fmt.Sprintf("%v", item["category"])+"' แล้วจ้า")
+		}()
 	}
 	w.WriteHeader(http.StatusOK)
 }
