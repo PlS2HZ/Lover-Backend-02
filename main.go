@@ -406,15 +406,13 @@ func main() {
 	http.HandleFunc("/api/login", handleLogin)
 	http.HandleFunc("/api/users", handleGetAllUsers)
 	http.HandleFunc("/api/request", handleCreateRequest)
+	http.HandleFunc("/api/events", handleGetMyEvents) // ดึงรายการมาโชว์ที่ปฏิทิน
 	http.HandleFunc("/api/update-status", handleUpdateStatus)
 	http.HandleFunc("/api/events/create", handleCreateEvent)
 	http.HandleFunc("/api/events/delete", handleDeleteEvent)
 	http.HandleFunc("/api/highlights", handleGetHighlights)
 	http.HandleFunc("/api/my-requests", handleGetMyRequests)
 	http.HandleFunc("/api/save-subscription", saveSubscriptionHandler)
-	http.HandleFunc("/api/events", handleGetMyEvents)        // ดึงรายการมาโชว์ที่ปฏิทิน
-	http.HandleFunc("/api/events/create", handleCreateEvent) // สร้างใหม่
-	http.HandleFunc("/api/events/delete", handleDeleteEvent) // ลบ
 
 	port := os.Getenv("PORT")
 	if port == "" {
