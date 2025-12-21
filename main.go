@@ -17,23 +17,24 @@ import (
 var jwtKey = []byte("your_secret_key_2025")
 
 type User struct {
-	ID        string `json:"id"`
-	Email     string `json:"email"`
-	Username  string `json:"username"`
-	Password  string `json:"password"`
-	AvatarURL string `json:"avatar_url"` // ✨ เพิ่มเพื่อรองรับรูปโปรไฟล์
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	AvatarURL   string `json:"avatar_url"`
+	Description string `json:"description"`
+	Gender      string `json:"gender"`
 }
 
 type RequestBody struct {
-	ID            string `json:"id,omitempty"`
-	Header        string `json:"header"`
-	Title         string `json:"title"`
-	Duration      string `json:"duration"`
-	SenderID      string `json:"sender_id"`
-	ReceiverEmail string `json:"receiver_email"`
-	TimeStart     string `json:"time_start"`
-	TimeEnd       string `json:"time_end"`
-	ImageURL      string `json:"image_url"` // ✨ เพิ่มเพื่อรองรับรูปแนบในคำขอ
+	ID               string `json:"id,omitempty"`
+	Header           string `json:"header"`
+	Title            string `json:"title"`
+	Duration         string `json:"duration"`
+	SenderID         string `json:"sender_id"`
+	ReceiverUsername string `json:"receiver_username"`
+	TimeStart        string `json:"time_start"`
+	TimeEnd          string `json:"time_end"`
+	ImageURL         string `json:"image_url"`
 }
 
 type Event struct {
@@ -44,13 +45,13 @@ type Event struct {
 	CreatedBy   string   `json:"created_by"`
 	VisibleTo   []string `json:"visible_to"`
 	RepeatType  string   `json:"repeat_type"`
-	ImageURL    string   `json:"image_url"` // ✨ เพิ่มเพื่อรองรับรูปในปฏิทิน
 }
 
 func enableCORS(w *http.ResponseWriter, r *http.Request) bool {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
-	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PATCH, PUT, DELETE")
-	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE, PATCH")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-Requested-With")
+
 	if r.Method == "OPTIONS" {
 		(*w).WriteHeader(http.StatusOK)
 		return true
@@ -73,8 +74,60 @@ func formatDisplayTime(t string) string {
 	if err != nil {
 		return t
 	}
-	thailandTime := parsedTime.Add(7 * time.Hour)
-	return thailandTime.Format("2006-01-02 TIME 15:04:05")
+	thailandTime := parsedTime.In(time.FixedZone("Asia/Bangkok", 7*3600))
+	return thailandTime.Format("2006-01-02 เวลา 15:04:05")
+}
+
+// ✨ ระบบตรวจสอบและแจ้งเตือนวันสำคัญ (Background Job)
+func checkAndNotify() {
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// ใช้เวลาปัจจุบันในรูปแบบ UTC และตัดวินาทีออกเพื่อให้ตรงกับฐานข้อมูล
+	now := time.Now().UTC().Truncate(time.Minute)
+	targetTime := now.Format("2006-01-02T15:04:00.000Z")
+
+	var results []map[string]interface{}
+	// ✅ แก้ไขบรรทัดที่มีปัญหาเรื่องจำนวน Return values
+	_, err := client.From("events").Select("*", "exact", false).Eq("event_date", targetTime).ExecuteTo(&results)
+
+	if err != nil {
+		fmt.Printf("❌ Database error: %v\n", err)
+		return
+	}
+
+	if len(results) > 0 {
+		for _, ev := range results {
+			msg := fmt.Sprintf("--------------------------------------------------\n🔔 **แจ้งเตือนวันสำคัญถึงเวลาแล้ว!**\n📌 หัวข้อ: %v\n📝 รายละเอียด: %v\n⏰ เวลา: %s\nLink: https://lover-frontend-ashen.vercel.app/",
+				ev["title"], ev["description"], formatDisplayTime(ev["event_date"].(string)))
+			sendDiscord(msg)
+		}
+	}
+}
+
+func startCronJob() {
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		for range ticker.C {
+			checkAndNotify()
+		}
+	}()
+}
+
+func handleRegister(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	var user User
+	json.NewDecoder(r.Body).Decode(&user)
+	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	row := map[string]interface{}{"username": user.Username, "password": string(hashedPassword)}
+	_, _, err := client.From("users").Insert(row, false, "", "", "").Execute()
+	if err != nil {
+		http.Error(w, "Conflict", http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -82,30 +135,25 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var creds struct {
-		Identifier string `json:"identifier"`
-		Password   string `json:"password"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	json.NewDecoder(r.Body).Decode(&creds)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var users []map[string]interface{}
-	filter := fmt.Sprintf("email.eq.%s,username.eq.%s", creds.Identifier, creds.Identifier)
-	client.From("users").Select("*", "exact", false).Or(filter, "").ExecuteTo(&users)
+	client.From("users").Select("*", "exact", false).Eq("username", creds.Username).ExecuteTo(&users)
 	if len(users) == 0 {
-		http.Error(w, "User not found", http.StatusUnauthorized)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(users[0]["password"].(string)), []byte(creds.Password)); err != nil {
-		http.Error(w, "Wrong password", http.StatusUnauthorized)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"user_id": users[0]["id"], "username": users[0]["username"], "exp": time.Now().Add(time.Hour * 72).Unix()})
 	tokenString, _ := token.SignedString(jwtKey)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"token":      tokenString,
-		"username":   users[0]["username"].(string),
-		"user_id":    users[0]["id"].(string),
-		"email":      users[0]["email"].(string),
-		"avatar_url": users[0]["avatar_url"], // ✨ ส่งรูปโปรไฟล์กลับไปตอน Login
+		"token": tokenString, "username": users[0]["username"], "user_id": users[0]["id"], "avatar_url": users[0]["avatar_url"],
 	})
 }
 
@@ -115,7 +163,7 @@ func handleGetAllUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var users []map[string]interface{}
-	client.From("users").Select("id, email, username, avatar_url", "exact", false).ExecuteTo(&users)
+	client.From("users").Select("id, username, avatar_url", "exact", false).ExecuteTo(&users)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
 }
@@ -134,9 +182,9 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		sName = sender[0]["username"].(string)
 	}
 	var receiver []map[string]interface{}
-	client.From("users").Select("id, username", "exact", false).Eq("email", req.ReceiverEmail).ExecuteTo(&receiver)
+	client.From("users").Select("id, username", "exact", false).Eq("username", req.ReceiverUsername).ExecuteTo(&receiver)
 	if len(receiver) == 0 {
-		http.Error(w, "Receiver Not Found", http.StatusNotFound)
+		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
 	rName := receiver[0]["username"].(string)
@@ -144,8 +192,7 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		"category": req.Header, "title": req.Title, "description": req.Duration,
 		"sender_id": req.SenderID, "receiver_id": receiver[0]["id"].(string),
 		"status": "pending", "sender_name": sName, "receiver_name": rName,
-		"remark":    fmt.Sprintf("%s|%s", req.TimeStart, req.TimeEnd),
-		"image_url": req.ImageURL, // ✨ เก็บลิงก์รูปแนบ
+		"remark": fmt.Sprintf("%s|%s", req.TimeStart, req.TimeEnd), "image_url": req.ImageURL,
 	}
 	client.From("requests").Insert(row, false, "", "", "").Execute()
 	go func() {
@@ -188,7 +235,7 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 			statusText := "อนุมัติ"
 			reasonLine := ""
 			if body.Status == "rejected" {
-				statusText = "ไม่อนุมัติ"
+				statusText = "ไม่นุมัติ"
 				reasonLine = fmt.Sprintf("\nเหตุผลไม่อนุมัติ: %s", body.Comment)
 			}
 			msg := fmt.Sprintf("--------------------------------------------------\n@everyone\nผลการพิจารณาคำขอ!สถานะ: %s\nจาก: %v\nถึง: %v\nหัวข้อ: %v\nรายละเอียด: %v%s\nLink: https://lover-frontend-ashen.vercel.app/", statusText, item["sender_name"], item["receiver_name"], item["category"], item["title"], reasonLine)
@@ -205,24 +252,16 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	var ev Event
 	json.NewDecoder(r.Body).Decode(&ev)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-
 	row := map[string]interface{}{
-		"event_date":  ev.EventDate,
-		"title":       ev.Title,
-		"description": ev.Description,
-		"repeat_type": ev.RepeatType,
-		"image_url":   ev.ImageURL, // ✨ เก็บลิงก์รูปภาพในปฏิทิน
+		"event_date": ev.EventDate, "title": ev.Title, "description": ev.Description, "repeat_type": ev.RepeatType,
 	}
-
 	if ev.CreatedBy != "" {
 		row["created_by"] = ev.CreatedBy
 	}
 	if len(ev.VisibleTo) > 0 {
 		row["visible_to"] = ev.VisibleTo
 	}
-
 	client.From("events").Insert(row, false, "", "", "").Execute()
-
 	go func() {
 		creator := "ใครบางคน"
 		var sender []map[string]interface{}
@@ -264,27 +303,42 @@ func handleCronRemind(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
-	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-	now := time.Now().UTC().Truncate(time.Minute)
-	targetTime := now.Format("2006-01-02T15:04:00.000Z")
-	fmt.Printf("🎯 กำลังตรวจสอบรายการที่ตรงกับเวลา: %s\n", targetTime)
-	var results []map[string]interface{}
-	_, err := client.From("events").Select("*", "exact", false).Eq("event_date", targetTime).ExecuteTo(&results)
-	if err != nil {
-		fmt.Printf("❌ Database Error: %v\n", err)
+	checkAndNotify()
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
 		return
 	}
-	if len(results) > 0 {
-		for _, ev := range results {
-			msg := fmt.Sprintf("--------------------------------------------------\n🔔 **แจ้งเตือนวันสำคัญ!**\n📌 หัวข้อ: %v\n⏰ เวลา: %s\nLink: https://lover-frontend-ashen.vercel.app/", ev["title"], formatDisplayTime(ev["event_date"].(string)))
-			sendDiscord(msg)
+	var body struct {
+		ID              string `json:"id"`
+		Username        string `json:"username"`
+		Description     string `json:"description"`
+		Gender          string `json:"gender"`
+		AvatarURL       string `json:"avatar_url"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var users []map[string]interface{}
+	client.From("users").Select("*", "exact", false).Eq("id", body.ID).ExecuteTo(&users)
+	if len(users) > 0 && body.Username != users[0]["username"].(string) {
+		if err := bcrypt.CompareHashAndPassword([]byte(users[0]["password"].(string)), []byte(body.ConfirmPassword)); err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 	}
+	updateData := map[string]interface{}{"username": body.Username, "description": body.Description, "gender": body.Gender, "avatar_url": body.AvatarURL}
+	client.From("users").Update(updateData, "", "").Eq("id", body.ID).Execute()
 	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
 	godotenv.Load()
+	startCronJob()
+
+	http.HandleFunc("/api/register", handleRegister)
 	http.HandleFunc("/api/login", handleLogin)
 	http.HandleFunc("/api/users", handleGetAllUsers)
 	http.HandleFunc("/api/request", handleCreateRequest)
@@ -294,10 +348,12 @@ func main() {
 	http.HandleFunc("/api/events/create", handleCreateEvent)
 	http.HandleFunc("/api/events/delete", handleDeleteEvent)
 	http.HandleFunc("/api/cron/remind", handleCronRemind)
+	http.HandleFunc("/api/users/update", handleUpdateProfile)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	fmt.Printf("🚀 Server is live on port %s\n", port)
+	fmt.Printf("🚀 Server live on %s\n", port)
 	http.ListenAndServe(":"+port, nil)
 }
