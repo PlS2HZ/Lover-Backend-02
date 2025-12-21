@@ -82,10 +82,13 @@ func formatDisplayTime(t string) string {
 
 func checkAndNotify() {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// ✅ ดึงเวลา UTC ปัจจุบัน และตัดวินาที/มิลลิวินาทีให้เป็น 00:00
 	now := time.Now().UTC().Truncate(time.Minute)
 	targetTime := now.Format("2006-01-02T15:04:00.000Z")
 
 	var results []map[string]interface{}
+	// ค้นหา Event ที่มีเวลาตรงกับ targetTime เป๊ะๆ
 	_, err := client.From("events").Select("*", "exact", false).Eq("event_date", targetTime).ExecuteTo(&results)
 
 	if err != nil {
@@ -247,12 +250,13 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	var ev Event
 	json.NewDecoder(r.Body).Decode(&ev)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
 	row := map[string]interface{}{
 		"event_date":  ev.EventDate,
 		"title":       ev.Title,
 		"description": ev.Description,
 		"repeat_type": ev.RepeatType,
-		"is_special":  ev.IsSpecial, // บันทึกค่าว่าเป็นวันสำคัญ
+		"is_special":  true, // บังคับให้เป็น true
 	}
 	if ev.CreatedBy != "" {
 		row["created_by"] = ev.CreatedBy
@@ -261,6 +265,13 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 		row["visible_to"] = ev.VisibleTo
 	}
 	client.From("events").Insert(row, false, "", "", "").Execute()
+
+	// ✨ แจ้งเตือน Discord ทันทีเมื่อบันทึก
+	go func() {
+		msg := fmt.Sprintf("--------------------------------------------------\n💖 **มีการบันทึกวันพิเศษใหม่!**\n📌 หัวข้อ: %s\n📅 วันที่: %s\nLink: https://lover-frontend-ashen.vercel.app/", ev.Title, formatDisplayTime(ev.EventDate))
+		sendDiscord(msg)
+	}()
+
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -328,8 +339,28 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.URL.Query().Get("id")
+	title := r.URL.Query().Get("title") // ดึงชื่อมาโชว์
+	uID := r.URL.Query().Get("user_id")
+
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// ดึงชื่อผู้ลบ (ถ้าต้องการ)
+	var user []map[string]interface{}
+	client.From("users").Select("username", "exact", false).Eq("id", uID).ExecuteTo(&user)
+	uName := "ใครบางคน"
+	if len(user) > 0 {
+		uName = user[0]["username"].(string)
+	}
+
+	// ลบข้อมูล
 	client.From("events").Delete("", "").Eq("id", id).Execute()
+
+	// ✨ แจ้งเตือน Discord เมื่อมีการลบ
+	go func() {
+		msg := fmt.Sprintf("--------------------------------------------------\n🗑️ **มีการลบวันพิเศษออก!**\n📌 หัวข้อที่ลบ: %s\n👤 ผู้ดำเนินการ: %s\nLink: https://lover-frontend-ashen.vercel.app/", title, uName)
+		sendDiscord(msg)
+	}()
+
 	w.WriteHeader(http.StatusOK)
 }
 
