@@ -89,6 +89,22 @@ func triggerPushNotification(userID string, title string, message string) {
 	}
 }
 
+func handleGetMyEvents(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	uID := r.URL.Query().Get("user_id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var data []map[string]interface{}
+
+	// ✅ ปรับ Filter ให้ดึงข้อมูลที่นายสร้างเอง หรือที่มีชื่อนายอยู่ใน visible_to
+	filter := fmt.Sprintf("created_by.eq.%s,visible_to.cs.{%s}", uID, uID)
+	client.From("events").Select("*", "exact", false).Or(filter, "").Order("event_date", &postgrest.OrderOpts{Ascending: true}).ExecuteTo(&data)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
+}
+
 // ✅ ส่ง Discord Embed
 func sendDiscordEmbed(title, description string, color int, fields []map[string]interface{}, imageURL string) {
 	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
