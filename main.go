@@ -48,9 +48,10 @@ type Event struct {
 }
 
 func enableCORS(w *http.ResponseWriter, r *http.Request) bool {
+	// 💡 เปลี่ยนจาก "*" เป็นการอนุญาตแบบระบุ Origin หรือตรวจสอบ Request Origin
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
-	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE, PATCH")
-	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-Requested-With")
+	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 	if r.Method == "OPTIONS" {
 		(*w).WriteHeader(http.StatusOK)
