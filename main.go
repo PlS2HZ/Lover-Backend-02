@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -49,6 +50,10 @@ type Event struct {
 	RepeatType   string   `json:"repeat_type"`
 	IsSpecial    bool     `json:"is_special"`
 	CategoryType string   `json:"category_type"`
+}
+type PushSubscription struct {
+	UserID       string      `json:"user_id"`
+	Subscription interface{} `json:"subscription"`
 }
 
 // --- Discord Embed System ---
@@ -430,6 +435,41 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// วางไว้ด้านบนของ func main()
+func saveSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	} // อย่าลืมใส่ CORS ด้วยครับเพื่อให้หน้าบ้านส่งมาได้
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var sub PushSubscription
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	data := map[string]interface{}{
+		"user_id":           sub.UserID,
+		"subscription_json": sub.Subscription,
+	}
+
+	// แก้ไข: ใช้ client (supabase) ที่นายมีอยู่แล้วใน main.go
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	_, _, err := client.From("push_subscriptions").Insert(data, false, "", "", "").Execute()
+
+	if err != nil {
+		log.Printf("Error saving subscription: %v", err) // ตอนนี้ log จะไม่ undefined แล้ว
+		http.Error(w, "Failed to save subscription", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func main() {
 	godotenv.Load()
 	startCronJob()
@@ -444,6 +484,7 @@ func main() {
 	http.HandleFunc("/api/events/delete", handleDeleteEvent)
 	http.HandleFunc("/api/highlights", handleGetHighlights)
 	http.HandleFunc("/api/users/update", handleUpdateProfile)
+	http.HandleFunc("/api/save-subscription", saveSubscriptionHandler)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
