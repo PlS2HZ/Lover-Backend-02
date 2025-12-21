@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/SherClockHolmes/webpush-go"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
 	"github.com/supabase-community/postgrest-go"
@@ -468,6 +469,34 @@ func saveSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func triggerPushNotification(userID string, title string, message string) {
+	// 1. ดึง Subscription ของคนที่เราจะส่งหาจาก Supabase
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var results []struct {
+		SubscriptionJSON string `json:"subscription_json"`
+	}
+
+	// ดึงกุญแจเครื่องของ User คนนั้น
+	client.From("push_subscriptions").Select("subscription_json", "", false).Eq("user_id", userID).ExecuteTo(&results)
+
+	for _, res := range results {
+		s := &webpush.Subscription{}
+		json.Unmarshal([]byte(res.SubscriptionJSON), s)
+
+		// 2. ส่ง Notification
+		resp, err := webpush.SendNotification([]byte(fmt.Sprintf(`{"title":"%s", "body":"%s", "url":"/"}`, title, message)), s, &webpush.Options{
+			Subscriber:      os.Getenv("VAPID_EMAIL"),
+			VAPIDPublicKey:  os.Getenv("VAPID_PUBLIC_KEY"),
+			VAPIDPrivateKey: os.Getenv("VAPID_PRIVATE_KEY"),
+			TTL:             30,
+		})
+		if err != nil {
+			log.Printf("Push error: %v", err)
+		}
+		defer resp.Body.Close()
+	}
 }
 
 func main() {
