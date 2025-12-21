@@ -327,16 +327,31 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
 	var users []map[string]interface{}
 	client.From("users").Select("*", "exact", false).Eq("id", body.ID).ExecuteTo(&users)
+
+	// ✅ ตรวจสอบว่ามีการเปลี่ยนชื่อจริงหรือไม่ ถ้าเปลี่ยนต้องเช็ครหัสผ่าน
 	if len(users) > 0 && body.Username != users[0]["username"].(string) {
 		if err := bcrypt.CompareHashAndPassword([]byte(users[0]["password"].(string)), []byte(body.ConfirmPassword)); err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 	}
-	updateData := map[string]interface{}{"username": body.Username, "description": body.Description, "gender": body.Gender, "avatar_url": body.AvatarURL}
-	client.From("users").Update(updateData, "", "").Eq("id", body.ID).Execute()
+
+	// ✅ มั่นใจว่าข้อมูลทุกช่องถูกส่งไปบันทึก
+	updateData := map[string]interface{}{
+		"username":    body.Username,
+		"description": body.Description,
+		"gender":      body.Gender,
+		"avatar_url":  body.AvatarURL,
+	}
+
+	_, _, err := client.From("users").Update(updateData, "", "").Eq("id", body.ID).Execute()
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
