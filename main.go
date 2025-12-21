@@ -80,12 +80,18 @@ func formatDisplayTime(t string) string {
 	return thailandTime.Format("2006-01-02 เวลา 15:04:05")
 }
 
+var lastNotifiedMinute string
+
 func checkAndNotify() {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
 	// ✅ ดึงเวลา UTC ปัจจุบัน และตัดวินาที/มิลลิวินาทีให้เป็น 00:00
 	now := time.Now().UTC().Truncate(time.Minute)
 	targetTime := now.Format("2006-01-02T15:04:00.000Z")
+
+	if lastNotifiedMinute == targetTime {
+		return
+	}
 
 	var results []map[string]interface{}
 	// ค้นหา Event ที่มีเวลาตรงกับ targetTime เป๊ะๆ
@@ -97,6 +103,9 @@ func checkAndNotify() {
 	}
 
 	if len(results) > 0 {
+
+		lastNotifiedMinute = targetTime
+
 		for _, ev := range results {
 			msg := fmt.Sprintf("--------------------------------------------------\n🔔 **แจ้งเตือนวันสำคัญถึงเวลาแล้ว!**\n📌 หัวข้อ: %v\n📝 รายละเอียด: %v\n⏰ เวลา: %s\nLink: https://lover-frontend-ashen.vercel.app/",
 				ev["title"], ev["description"], formatDisplayTime(ev["event_date"].(string)))
