@@ -97,7 +97,7 @@ func handleGetMyEvents(w http.ResponseWriter, r *http.Request) {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var data []map[string]interface{}
 
-	// ✅ ปรับ Filter ให้ดึงข้อมูลที่นายสร้างเอง หรือที่มีชื่อนายอยู่ใน visible_to
+	// ✅ ปรับ Filter ให้รองรับทั้งวันที่นายสร้าง (created_by) และที่แฟนแชร์ให้ (visible_to)
 	filter := fmt.Sprintf("created_by.eq.%s,visible_to.cs.{%s}", uID, uID)
 	client.From("events").Select("*", "exact", false).Or(filter, "").Order("event_date", &postgrest.OrderOpts{Ascending: true}).ExecuteTo(&data)
 
@@ -412,6 +412,9 @@ func main() {
 	http.HandleFunc("/api/highlights", handleGetHighlights)
 	http.HandleFunc("/api/my-requests", handleGetMyRequests)
 	http.HandleFunc("/api/save-subscription", saveSubscriptionHandler)
+	http.HandleFunc("/api/events", handleGetMyEvents)        // ดึงรายการมาโชว์ที่ปฏิทิน
+	http.HandleFunc("/api/events/create", handleCreateEvent) // สร้างใหม่
+	http.HandleFunc("/api/events/delete", handleDeleteEvent) // ลบ
 
 	port := os.Getenv("PORT")
 	if port == "" {
