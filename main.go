@@ -169,7 +169,10 @@ func handleGetAllUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var users []map[string]interface{}
-	client.From("users").Select("id, username, avatar_url", "exact", false).ExecuteTo(&users)
+
+	// ✅ ต้องดึง description และ gender ออกมาด้วย!
+	client.From("users").Select("id, username, avatar_url, description, gender", "exact", false).ExecuteTo(&users)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
 }
@@ -317,11 +320,12 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
+
 	var body struct {
 		ID              string `json:"id"`
 		Username        string `json:"username"`
-		Description     string `json:"description"`
-		Gender          string `json:"gender"`
+		Description     string `json:"description"` // ✨ ต้องมี json:"description"
+		Gender          string `json:"gender"`      // ✨ ต้องมี json:"gender"
 		AvatarURL       string `json:"avatar_url"`
 		ConfirmPassword string `json:"confirm_password"`
 	}
