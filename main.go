@@ -82,6 +82,40 @@ type Moment struct {
 	Caption  string `json:"caption"`
 }
 
+// โครงสร้างสำหรับเก็บตั้งค่าหน้า Home
+type HomeConfig struct {
+	ID         string `json:"id,omitempty"`
+	ConfigType string `json:"config_type"` // 'slideshow', 'fixed', 'mosaic'
+	Data       string `json:"data"`        // เก็บ JSON string ของข้อมูลรูปภาพ
+}
+
+// Handler สำหรับดึงข้อมูลตั้งค่าหน้า Home
+func handleGetHomeConfig(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var results []map[string]interface{}
+	client.From("home_configs").Select("*", "exact", false).ExecuteTo(&results)
+	json.NewEncoder(w).Encode(results)
+}
+
+// Handler สำหรับบันทึกตั้งค่าหน้า Home
+func handleUpdateHomeConfig(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	var config HomeConfig
+	json.NewDecoder(r.Body).Decode(&config)
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// ลบอันเก่าแล้วใส่ใหม่ (Upsert)
+	client.From("home_configs").Delete("", "").Eq("config_type", config.ConfigType).Execute()
+	client.From("home_configs").Insert(config, false, "", "", "").Execute()
+
+	w.WriteHeader(http.StatusOK)
+}
+
 // 1. บันทึกรูปภาพประจำวัน
 func handleSaveMoment(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
@@ -736,6 +770,8 @@ func main() {
 	http.HandleFunc("/api/mood/delete", handleDeleteMood)
 	http.HandleFunc("/api/wishlist/delete", handleDeleteWishlist)
 	http.HandleFunc("/api/moment/delete", handleDeleteMoment)
+	http.HandleFunc("/api/home-config/get", handleGetHomeConfig)
+	http.HandleFunc("/api/home-config/update", handleUpdateHomeConfig)
 
 	port := os.Getenv("PORT")
 	if port == "" {
