@@ -352,18 +352,25 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	uID := r.URL.Query().Get("user_id")
 
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-	var ev []map[string]interface{}
-	client.From("events").Select("visible_to", "exact", false).Eq("id", id).ExecuteTo(&ev)
 
+	// ✅ 1. ต้องดึงข้อมูลไว้ก่อนลบ เพราะถ้าลบแล้วจะหา visible_to ไม่เจอ
+	var results []map[string]interface{}
+	client.From("events").Select("visible_to", "exact", false).Eq("id", id).ExecuteTo(&results)
+
+	// ✅ 2. ทำการลบข้อมูลจริง
 	client.From("events").Delete("", "").Eq("id", id).Execute()
 
 	go func() {
+		// ส่ง Discord
 		sendDiscordEmbed("🗑️ ลบวันพิเศษ", "ลบหัวข้อ: "+title, 15158332, nil, "")
-		if len(ev) > 0 {
-			if visibleTo, ok := ev[0]["visible_to"].([]interface{}); ok {
-				for _, uid := range visibleTo {
-					if uid.(string) != uID {
-						triggerPushNotification(uid.(string), "🗑️ มีนัดหมายถูกลบออก", "นัดหมาย '"+title+"' ถูกยกเลิกแล้ว")
+
+		// ✅ 3. ส่ง PWA แจ้งเตือนแฟน (คนที่มีรายชื่อใน visible_to แต่ไม่ใช่คนลบ)
+		if len(results) > 0 {
+			if v, ok := results[0]["visible_to"].([]interface{}); ok {
+				for _, uid := range v {
+					targetID := uid.(string)
+					if targetID != uID { // ไม่ส่งหาคนกดลบ
+						triggerPushNotification(targetID, "🗑️ นัดหมายถูกยกเลิก", "นัดหมาย '"+title+"' ถูกลบออกแล้ว")
 					}
 				}
 			}
