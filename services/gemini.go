@@ -23,7 +23,7 @@ type GeminiResponse struct {
 
 // ฟังก์ชันหลักที่ใช้ถาม Gemini
 func AskGemini(secretWord string, question string) string {
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	apiKey := os.Getenv("AIzaSyB2qgz2OqRuXZkjUZkx8XPrblnpmvBzddY")
 	if apiKey == "" {
 		return "API Key missing"
 	}
@@ -31,15 +31,14 @@ func AskGemini(secretWord string, question string) string {
 	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey
 
 	// สร้าง Prompt ที่เข้มงวดเพื่อให้บอทตอบแค่ 3 คำที่กำหนด
-	prompt := fmt.Sprintf(`คุณเป็นผู้ช่วยเล่นเกมทายคำ 
-คำตอบลับคือ: "%s"
-แฟนของผู้เล่นถามว่า: "%s"
-
-คำแนะนำ:
-1. วิเคราะห์คำถามเทียบกับคำตอบลับ
-2. ตอบเพียงคำเดียวจากรายการนี้เท่านั้น: "ใช่", "ไม่ใช่", "ถูกต้อง"
-3. ถ้าแฟนทายชื่อสิ่งของตรงๆ หรือใกล้เคียงมาก (เช่น มอไซค์ กับ รถมอเตอร์ไซค์) ให้ตอบว่า "ถูกต้อง"
-4. ห้ามอธิบาย ห้ามมีประโยคอื่น ห้ามเฉลย`, secretWord, question)
+	prompt := fmt.Sprintf(`คุณคือบอทในเกมทายคำในใจ 
+    คำลับที่ถูกต้องคือ: "%s" 
+    ผู้เล่นถามหรือทายว่า: "%s"
+    
+    กฎการตอบ:
+    1. ถ้าผู้เล่นทายได้ตรงกับคำลับ หรือมีความหมายเดียวกันเป๊ะ ให้ตอบว่า "ถูกต้อง" เท่านั้น
+    2. ถ้าเป็นคำถามทั่วไป ให้ตอบว่า "ใช่" หรือ "ไม่ใช่" ตามความเป็นจริงของคำลับนั้น
+    3. ห้ามตอบอย่างอื่นนอกเหนือจาก "ใช่", "ไม่ใช่", หรือ "ถูกต้อง"`, secretWord, question)
 
 	payload := map[string]interface{}{
 		"contents": []map[string]interface{}{
