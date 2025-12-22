@@ -23,7 +23,7 @@ type GeminiResponse struct {
 
 // ฟังก์ชันหลักที่ใช้ถาม Gemini
 func AskGemini(secretWord string, question string) string {
-	apiKey := os.Getenv("AIzaSyB2qgz2OqRuXZkjUZkx8XPrblnpmvBzddY")
+	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return "API Key missing"
 	}
