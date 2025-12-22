@@ -490,13 +490,11 @@ func handleCheckSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 	uID := r.URL.Query().Get("user_id")
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-
 	var results []map[string]interface{}
+	// ✅ ตรวจสอบว่ามีแถวข้อมูลของ User นี้ในตารางแจ้งเตือนไหม
 	client.From("push_subscriptions").Select("id", "exact", false).Eq("user_id", uID).ExecuteTo(&results)
-
-	// ถ้าเจอข้อมูลในตาราง แสดงว่าเปิดไว้ (true)
-	isSubscribed := len(results) > 0
-	json.NewEncoder(w).Encode(map[string]bool{"subscribed": isSubscribed})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"subscribed": len(results) > 0})
 }
 
 func main() {
