@@ -58,6 +58,12 @@ type PushSubscription struct {
 	Subscription interface{} `json:"subscription"`
 }
 
+type DailyMood struct {
+	UserID    string `json:"user_id"`
+	MoodEmoji string `json:"mood_emoji"`
+	MoodText  string `json:"mood_text"`
+}
+
 // --- Notification Systems ---
 
 func triggerPushNotification(userID string, title string, message string) {
@@ -504,6 +510,57 @@ func handleCheckSubscription(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"subscribed": len(results) > 0})
 }
 
+// ฟังก์ชันบันทึกอารมณ์
+func handleSaveMood(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	var m DailyMood
+	json.NewDecoder(r.Body).Decode(&m)
+
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// บันทึกลงฐานข้อมูล
+	client.From("daily_moods").Insert(m, false, "", "", "").Execute()
+
+	// ✅ ส่งแจ้งเตือน PWA และ Discord
+	go func() {
+		// ดึงรายชื่อผู้ใช้ทั้งหมดเพื่อหาแฟน (สมมติว่าแฟนคือคนที่ไม่ใช่เราในระบบ 2 คน)
+		var allUsers []map[string]interface{}
+		client.From("users").Select("id", "exact", false).ExecuteTo(&allUsers)
+
+		for _, u := range allUsers {
+			targetID := u["id"].(string)
+			if targetID != m.UserID { // ส่งหาคนอื่นที่ไม่ใช่คนบันทึก
+				triggerPushNotification(targetID, "🌈 แฟนอัปเดตอารมณ์แล้ว", "ตอนนี้รู้สึก: "+m.MoodEmoji)
+			}
+		}
+
+		// ส่ง Discord
+		msg := fmt.Sprintf("แฟนอัปเดตความรู้สึก: %s\nโน้ต: %s", m.MoodEmoji, m.MoodText)
+		sendDiscordEmbed("🌈 Our Daily Mood Update!", msg, 16738740, nil, "")
+	}()
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// ฟังก์ชันดึงประวัติอารมณ์
+// ฟังก์ชันดึงประวัติอารมณ์
+func handleGetMoods(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var results []map[string]interface{}
+
+	// ✅ แก้ไขจาก .Limit(20) เป็น .Limit(20, "")
+	// พารามิเตอร์ตัวที่สองคือ offset (ตำแหน่งเริ่มต้น) ให้ใส่เป็นค่าว่าง "" ครับ
+	client.From("daily_moods").Select("*", "exact", false).Order("created_at", &postgrest.OrderOpts{Ascending: false}).Limit(20, "").ExecuteTo(&results)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
+}
+
 func main() {
 	godotenv.Load()
 	startSpecialDayReminder()
@@ -528,6 +585,8 @@ func main() {
 	http.HandleFunc("/api/unsubscribe", handleUnsubscribe) // ✅ เพิ่ม Route นี้
 	http.HandleFunc("/api/users/update", handleUpdateProfile)
 	http.HandleFunc("/api/check-subscription", handleCheckSubscription)
+	http.HandleFunc("/api/save-mood", handleSaveMood) // ฟังก์ชันบันทึกอารมณ์
+	http.HandleFunc("/api/get-moods", handleGetMoods)
 
 	port := os.Getenv("PORT")
 	if port == "" {
