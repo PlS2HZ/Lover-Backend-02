@@ -60,7 +60,6 @@ type PushSubscription struct {
 
 // --- Notification Systems ---
 
-// ✅ ส่ง Web Push เข้ามือถือ
 func triggerPushNotification(userID string, title string, message string) {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var results []map[string]interface{}
@@ -97,7 +96,6 @@ func handleGetMyEvents(w http.ResponseWriter, r *http.Request) {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var data []map[string]interface{}
 
-	// ✅ ปรับ Filter ให้รองรับทั้งวันที่นายสร้าง (created_by) และที่แฟนแชร์ให้ (visible_to)
 	filter := fmt.Sprintf("created_by.eq.%s,visible_to.cs.{%s}", uID, uID)
 	client.From("events").Select("*", "exact", false).Or(filter, "").Order("event_date", &postgrest.OrderOpts{Ascending: true}).ExecuteTo(&data)
 
@@ -105,7 +103,6 @@ func handleGetMyEvents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// ✅ ส่ง Discord Embed
 func sendDiscordEmbed(title, description string, color int, fields []map[string]interface{}, imageURL string) {
 	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
 	if webhookURL == "" {
@@ -124,8 +121,6 @@ func sendDiscordEmbed(title, description string, color int, fields []map[string]
 	jsonData, _ := json.Marshal(payload)
 	http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
 }
-
-// --- Helpers ---
 
 func enableCORS(w *http.ResponseWriter, r *http.Request) bool {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
@@ -146,8 +141,6 @@ func formatDisplayTime(t string) string {
 	thailandTime := parsedTime.In(time.FixedZone("Asia/Bangkok", 7*3600))
 	return thailandTime.Format("2006-01-02 เวลา 15:04 น.")
 }
-
-// --- Cron Jobs ---
 
 func checkAndNotify() {
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
@@ -195,8 +188,6 @@ func startSpecialDayReminder() {
 	}()
 }
 
-// --- Handlers ---
-
 func saveSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
@@ -207,6 +198,24 @@ func saveSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	client.From("push_subscriptions").Delete("", "").Eq("user_id", sub.UserID).Execute()
 	data := map[string]interface{}{"user_id": sub.UserID, "subscription_json": sub.Subscription}
 	client.From("push_subscriptions").Insert(data, false, "", "", "").Execute()
+	w.WriteHeader(http.StatusOK)
+}
+
+// ✅ เพิ่มฟังก์ชัน Unsubscribe ตามที่นายต้องการ
+func handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	var body struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid Body", 400)
+		return
+	}
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	// ลบการลงทะเบียนทั้งหมดของ User คนนี้ออก
+	client.From("push_subscriptions").Delete("", "").Eq("user_id", body.UserID).Execute()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -236,15 +245,12 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	client.From("requests").Insert(row, false, "", "", "").Execute()
 
-	// ✅ กลับมาส่ง Discord Embed เหมือนเดิมแล้วครับ
 	go func() {
 		fields := []map[string]interface{}{
 			{"name": "👤 ถึง", "value": rName, "inline": true},
 			{"name": "⏰ เริ่ม", "value": formatDisplayTime(req.TimeStart), "inline": false},
 		}
 		sendDiscordEmbed("📢 มีคำขอใหม่ส่งถึงคุณ!", "หัวข้อ: "+req.Header, 16737920, fields, req.ImageURL)
-
-		// และส่งเข้ามือถือด้วย
 		triggerPushNotification(rID, "📢 มีคำขอใหม่!", "แฟนส่งคำขอ '"+req.Header+"' มาให้จ้า ❤️")
 	}()
 
@@ -270,7 +276,6 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	if len(results) > 0 {
 		item := results[0]
 		go func() {
-			// ✅ กลับมาส่ง Discord Embed เมื่ออนุมัติ/ปฏิเสธ
 			color := 3066993 // Green
 			statusTitle := "✅ อนุมัติคำขอแล้ว!"
 			if body.Status == "rejected" {
@@ -282,8 +287,6 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 				{"name": "💬 เหตุผล", "value": body.Comment, "inline": false},
 			}
 			sendDiscordEmbed(statusTitle, "มีอัปเดตสถานะคำขอของคุณ", color, fields, "")
-
-			// และส่งเข้ามือถือด้วย
 			triggerPushNotification(item["sender_id"].(string), statusTitle, "แฟนพิจารณาคำขอ '"+fmt.Sprintf("%v", item["category"])+"' แล้วจ้า")
 		}()
 	}
@@ -321,26 +324,19 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.URL.Query().Get("id")
 	title := r.URL.Query().Get("title")
-	uID := r.URL.Query().Get("user_id") // ID คนที่กดลบ
+	uID := r.URL.Query().Get("user_id")
 
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-
-	// ✅ ก่อนลบ ให้ไปดึงข้อมูลก่อนว่าใครเคยเห็น Event นี้บ้าง จะได้ส่ง Push ไปบอกเขาถูก
 	var ev []map[string]interface{}
 	client.From("events").Select("visible_to", "exact", false).Eq("id", id).ExecuteTo(&ev)
 
-	// ทำการลบ
 	client.From("events").Delete("", "").Eq("id", id).Execute()
 
 	go func() {
-		// 1. ส่ง Discord ปกติ
 		sendDiscordEmbed("🗑️ ลบวันพิเศษ", "ลบหัวข้อ: "+title, 15158332, nil, "")
-
-		// 2. ส่ง Push บอกคนที่มีสิทธิ์เห็น (แฟน)
 		if len(ev) > 0 {
 			if visibleTo, ok := ev[0]["visible_to"].([]interface{}); ok {
 				for _, uid := range visibleTo {
-					// ไม่ส่งหาตัวเองที่กดลบ ให้ส่งหาคนอื่นในกลุ่ม
 					if uid.(string) != uID {
 						triggerPushNotification(uid.(string), "🗑️ มีนัดหมายถูกลบออก", "นัดหมาย '"+title+"' ถูกยกเลิกแล้ว")
 					}
@@ -350,8 +346,6 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	}()
 	w.WriteHeader(http.StatusOK)
 }
-
-// --- Standard Handlers ---
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
@@ -394,18 +388,13 @@ func handleGetHighlights(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// (รวม Endpoint อื่นๆ ตามโครงสร้างเดิม)
-// --- แก้ไขใน main.go ---
 func handleGetAllUsers(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var users []map[string]interface{}
-
-	// ✅ เพิ่ม description และ gender เข้าไปใน Select
 	client.From("users").Select("id, username, avatar_url, description, gender", "exact", false).ExecuteTo(&users)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
 }
@@ -441,15 +430,11 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-
-	// ✅ ถ้ามีการเปลี่ยนชื่อ ให้เช็ครหัสผ่านก่อน
 	var users []map[string]interface{}
 	client.From("users").Select("*", "exact", false).Eq("id", body.ID).ExecuteTo(&users)
 
 	if len(users) > 0 {
-		// เช็คว่าชื่อใหม่ไม่ซ้ำกับคนอื่น (ถ้าจะเปลี่ยนชื่อ)
 		if body.Username != users[0]["username"].(string) {
-			// เช็ครหัสผ่านยืนยัน
 			if err := bcrypt.CompareHashAndPassword([]byte(users[0]["password"].(string)), []byte(body.ConfirmPassword)); err != nil {
 				http.Error(w, "รหัสผ่านไม่ถูกต้องสำหรับการเปลี่ยนชื่อผู้ใช้งาน", http.StatusUnauthorized)
 				return
@@ -488,13 +473,14 @@ func main() {
 	http.HandleFunc("/api/login", handleLogin)
 	http.HandleFunc("/api/users", handleGetAllUsers)
 	http.HandleFunc("/api/request", handleCreateRequest)
-	http.HandleFunc("/api/events", handleGetMyEvents) // ดึงรายการมาโชว์ที่ปฏิทิน
+	http.HandleFunc("/api/events", handleGetMyEvents)
 	http.HandleFunc("/api/update-status", handleUpdateStatus)
 	http.HandleFunc("/api/events/create", handleCreateEvent)
 	http.HandleFunc("/api/events/delete", handleDeleteEvent)
 	http.HandleFunc("/api/highlights", handleGetHighlights)
 	http.HandleFunc("/api/my-requests", handleGetMyRequests)
 	http.HandleFunc("/api/save-subscription", saveSubscriptionHandler)
+	http.HandleFunc("/api/unsubscribe", handleUnsubscribe) // ✅ เพิ่ม Route นี้
 	http.HandleFunc("/api/users/update", handleUpdateProfile)
 
 	port := os.Getenv("PORT")
