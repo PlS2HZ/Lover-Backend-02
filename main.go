@@ -321,9 +321,33 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.URL.Query().Get("id")
 	title := r.URL.Query().Get("title")
+	uID := r.URL.Query().Get("user_id") // ID คนที่กดลบ
+
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// ✅ ก่อนลบ ให้ไปดึงข้อมูลก่อนว่าใครเคยเห็น Event นี้บ้าง จะได้ส่ง Push ไปบอกเขาถูก
+	var ev []map[string]interface{}
+	client.From("events").Select("visible_to", "exact", false).Eq("id", id).ExecuteTo(&ev)
+
+	// ทำการลบ
 	client.From("events").Delete("", "").Eq("id", id).Execute()
-	sendDiscordEmbed("🗑️ ลบวันพิเศษ", "ลบหัวข้อ: "+title, 15158332, nil, "")
+
+	go func() {
+		// 1. ส่ง Discord ปกติ
+		sendDiscordEmbed("🗑️ ลบวันพิเศษ", "ลบหัวข้อ: "+title, 15158332, nil, "")
+
+		// 2. ส่ง Push บอกคนที่มีสิทธิ์เห็น (แฟน)
+		if len(ev) > 0 {
+			if visibleTo, ok := ev[0]["visible_to"].([]interface{}); ok {
+				for _, uid := range visibleTo {
+					// ไม่ส่งหาตัวเองที่กดลบ ให้ส่งหาคนอื่นในกลุ่ม
+					if uid.(string) != uID {
+						triggerPushNotification(uid.(string), "🗑️ มีนัดหมายถูกลบออก", "นัดหมาย '"+title+"' ถูกยกเลิกแล้ว")
+					}
+				}
+			}
+		}
+	}()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -371,13 +395,18 @@ func handleGetHighlights(w http.ResponseWriter, r *http.Request) {
 }
 
 // (รวม Endpoint อื่นๆ ตามโครงสร้างเดิม)
+// --- แก้ไขใน main.go ---
 func handleGetAllUsers(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var users []map[string]interface{}
-	client.From("users").Select("id, username, avatar_url", "exact", false).ExecuteTo(&users)
+
+	// ✅ เพิ่ม description และ gender เข้าไปใน Select
+	client.From("users").Select("id, username, avatar_url, description, gender", "exact", false).ExecuteTo(&users)
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(users)
 }
 
@@ -390,6 +419,59 @@ func handleGetMyRequests(w http.ResponseWriter, r *http.Request) {
 	var data []map[string]interface{}
 	client.From("requests").Select("*", "exact", false).Or(fmt.Sprintf("sender_id.eq.%s,receiver_id.eq.%s", uID, uID), "").Order("created_at", &postgrest.OrderOpts{Ascending: false}).ExecuteTo(&data)
 	json.NewEncoder(w).Encode(data)
+}
+
+func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+
+	var body struct {
+		ID              string `json:"id"`
+		Username        string `json:"username"`
+		Description     string `json:"description"`
+		Gender          string `json:"gender"`
+		AvatarURL       string `json:"avatar_url"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// ✅ ถ้ามีการเปลี่ยนชื่อ ให้เช็ครหัสผ่านก่อน
+	var users []map[string]interface{}
+	client.From("users").Select("*", "exact", false).Eq("id", body.ID).ExecuteTo(&users)
+
+	if len(users) > 0 {
+		// เช็คว่าชื่อใหม่ไม่ซ้ำกับคนอื่น (ถ้าจะเปลี่ยนชื่อ)
+		if body.Username != users[0]["username"].(string) {
+			// เช็ครหัสผ่านยืนยัน
+			if err := bcrypt.CompareHashAndPassword([]byte(users[0]["password"].(string)), []byte(body.ConfirmPassword)); err != nil {
+				http.Error(w, "รหัสผ่านไม่ถูกต้องสำหรับการเปลี่ยนชื่อผู้ใช้งาน", http.StatusUnauthorized)
+				return
+			}
+		}
+	}
+
+	updateData := map[string]interface{}{
+		"username":    body.Username,
+		"description": body.Description,
+		"gender":      body.Gender,
+		"avatar_url":  body.AvatarURL,
+	}
+
+	_, _, err := client.From("users").Update(updateData, "", "").Eq("id", body.ID).Execute()
+	if err != nil {
+		http.Error(w, "Failed to update profile", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Update successful")
 }
 
 func main() {
@@ -413,6 +495,7 @@ func main() {
 	http.HandleFunc("/api/highlights", handleGetHighlights)
 	http.HandleFunc("/api/my-requests", handleGetMyRequests)
 	http.HandleFunc("/api/save-subscription", saveSubscriptionHandler)
+	http.HandleFunc("/api/users/update", handleUpdateProfile)
 
 	port := os.Getenv("PORT")
 	if port == "" {
