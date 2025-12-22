@@ -247,10 +247,12 @@ func handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		fields := []map[string]interface{}{
-			{"name": "👤 ถึง", "value": rName, "inline": true},
-			{"name": "⏰ เริ่ม", "value": formatDisplayTime(req.TimeStart), "inline": false},
+			{"name": "👤 ถึงคุณ", "value": rName, "inline": true},
+			{"name": "📝 หัวข้อ", "value": req.Title, "inline": true},
+			{"name": "⏰ เวลา", "value": formatDisplayTime(req.TimeStart), "inline": false},
 		}
-		sendDiscordEmbed("📢 มีคำขอใหม่ส่งถึงคุณ!", "หัวข้อ: "+req.Header, 16737920, fields, req.ImageURL)
+		// สีส้มทอง 16753920
+		sendDiscordEmbed("💌 มีคำขอใหม่ส่งถึงคุณ!", "หมวดหมู่: "+req.Header, 16753920, fields, req.ImageURL)
 		triggerPushNotification(rID, "📢 มีคำขอใหม่!", "แฟนส่งคำขอ '"+req.Header+"' มาให้จ้า ❤️")
 	}()
 
@@ -298,11 +300,19 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var ev Event
-	json.NewDecoder(r.Body).Decode(&ev)
+	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		http.Error(w, "Invalid Body", 400)
+		return
+	}
+
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	row := map[string]interface{}{
-		"event_date": ev.EventDate, "title": ev.Title, "description": ev.Description,
-		"repeat_type": ev.RepeatType, "is_special": true, "category_type": ev.CategoryType,
+		"event_date":    ev.EventDate,
+		"title":         ev.Title,
+		"description":   ev.Description,
+		"repeat_type":   ev.RepeatType,
+		"is_special":    true,
+		"category_type": ev.CategoryType,
 	}
 	if ev.CreatedBy != "" {
 		row["created_by"] = ev.CreatedBy
@@ -310,11 +320,26 @@ func handleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	if len(ev.VisibleTo) > 0 {
 		row["visible_to"] = ev.VisibleTo
 	}
+
+	// บันทึกลง Database
 	client.From("events").Insert(row, false, "", "", "").Execute()
 
-	for _, uid := range ev.VisibleTo {
-		go triggerPushNotification(uid, "💖 มีวันพิเศษใหม่!", ev.Title)
-	}
+	// ✅ ส่งแจ้งเตือนแบบจัดเต็ม
+	go func() {
+		// 1. ส่ง Discord แบบสวยงาม (สีชมพูสดใส 16738740)
+		fields := []map[string]interface{}{
+			{"name": "📅 วันที่", "value": ev.EventDate[:10], "inline": true},
+			{"name": "📌 ประเภท", "value": ev.CategoryType, "inline": true},
+			{"name": "📝 รายละเอียด", "value": ev.Description, "inline": false},
+		}
+		sendDiscordEmbed("💖 เพิ่มวันสำคัญใหม่แล้ว!", "หัวข้อ: "+ev.Title, 16738740, fields, "")
+
+		// 2. ส่ง Push เข้ามือถือ (PWA)
+		for _, uid := range ev.VisibleTo {
+			triggerPushNotification(uid, "💖 มีวันพิเศษใหม่!", "อย่าลืมนะ: "+ev.Title)
+		}
+	}()
+
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -459,6 +484,21 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "Update successful")
 }
 
+func handleCheckSubscription(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	uID := r.URL.Query().Get("user_id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	var results []map[string]interface{}
+	client.From("push_subscriptions").Select("id", "exact", false).Eq("user_id", uID).ExecuteTo(&results)
+
+	// ถ้าเจอข้อมูลในตาราง แสดงว่าเปิดไว้ (true)
+	isSubscribed := len(results) > 0
+	json.NewEncoder(w).Encode(map[string]bool{"subscribed": isSubscribed})
+}
+
 func main() {
 	godotenv.Load()
 	startSpecialDayReminder()
@@ -482,6 +522,7 @@ func main() {
 	http.HandleFunc("/api/save-subscription", saveSubscriptionHandler)
 	http.HandleFunc("/api/unsubscribe", handleUnsubscribe) // ✅ เพิ่ม Route นี้
 	http.HandleFunc("/api/users/update", handleUpdateProfile)
+	http.HandleFunc("/api/check-subscription", handleCheckSubscription)
 
 	port := os.Getenv("PORT")
 	if port == "" {
