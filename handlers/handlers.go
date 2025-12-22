@@ -581,50 +581,80 @@ func HandleStartHeartGame(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// ใน handlers/handlers.go
 func HandleAskQuestion(w http.ResponseWriter, r *http.Request) {
 	if utils.EnableCORS(&w, r) {
 		return
 	}
-	var msg models.GameMessage
-	json.NewDecoder(r.Body).Decode(&msg)
+
+	// 1. รับข้อมูลจาก Frontend
+	var msg struct {
+		GameID   string `json:"game_id"`
+		SenderID string `json:"sender_id"`
+		Message  string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
-	// 1. บันทึกคำถามของแฟนก่อน
+	// 2. ดึงข้อมูลโจทย์เพื่อเช็ค Secret Word และโหมดบอท
+	var gameData []map[string]interface{}
+	_, err := client.From("heart_games").Select("*", "", false).Eq("id", msg.GameID).ExecuteTo(&gameData)
+
+	if err != nil || len(gameData) == 0 {
+		http.Error(w, "ไม่พบข้อมูลเกมนี้", http.StatusNotFound)
+		return
+	}
+
+	// ✅ ป้องกัน Panic: เช็คค่า Secret Word ก่อนใช้
+	secretWordRaw := gameData[0]["secret_word"]
+	if secretWordRaw == nil {
+		http.Error(w, "ข้อมูล Secret Word ในระบบว่างเปล่า", http.StatusInternalServerError)
+		return
+	}
+	secretWord := secretWordRaw.(string)
+
+	// 3. บันทึกคำถามลงในตาราง game_messages
 	var savedMsg []map[string]interface{}
-	client.From("game_messages").Insert(msg, false, "", "", "").ExecuteTo(&savedMsg)
+	client.From("game_messages").Insert(map[string]interface{}{
+		"game_id":   msg.GameID,
+		"sender_id": msg.SenderID,
+		"message":   msg.Message,
+	}, false, "", "", "").ExecuteTo(&savedMsg)
 
-	// 2. ตรวจสอบว่าเกมนี้ใช้บอทหรือไม่
-	var game []map[string]interface{}
-	client.From("heart_games").Select("use_bot, secret_word", "", false).Eq("id", msg.GameID).ExecuteTo(&game)
+	if len(savedMsg) == 0 {
+		http.Error(w, "ไม่สามารถบันทึกข้อความได้", http.StatusInternalServerError)
+		return
+	}
+	msgID := savedMsg[0]["id"].(string)
 
-	if len(game) > 0 && !game[0]["use_bot"].(bool) {
-		hostID := game[0]["host_id"].(string)
+	// 4. ตรวจสอบโหมดการเล่น (ใช้บอท หรือ เล่นกับคน)
+	// หมายเหตุ: ในระบบใหม่เราเช็คจากโหมดใน Session หรือจากตัวแปร use_bot ใน heart_games
+	useBot, _ := gameData[0]["use_bot"].(bool)
+
+	if useBot {
+		// ✅ โหมดบอท: ให้ Gemini ตอบทันที
+		botAnswer := services.AskGemini(secretWord, msg.Message)
+
+		// อัปเดตคำตอบของบอท
+		client.From("game_messages").Update(map[string]interface{}{"answer": botAnswer}, "", "").Eq("id", msgID).Execute()
+
+		// ถ้าทายถูก ให้จบเกม
+		if botAnswer == "ถูกต้อง" {
+			client.From("heart_games").Update(map[string]interface{}{
+				"status": "finished",
+			}, "", "").Eq("id", msg.GameID).Execute()
+		}
+	} else {
+		// ✅ โหมดเล่นกับคน: ส่งแจ้งเตือนหาเจ้าของโจทย์
+		hostID, _ := gameData[0]["host_id"].(string)
 		go services.TriggerPushNotification(hostID, "🎮 แฟนถามมาแล้ว!", "รีบไปตอบ ใช่ หรือ ไม่ใช่ ในหน้าเกมเร็ว! ❤️")
 	}
 
-	if len(game) > 0 && game[0]["use_bot"].(bool) {
-		// ✅ ถ้าใช้บอท ให้บอทตอบทันที
-		secretWord := game[0]["secret_word"].(string)
-		botAnswer := services.AskGemini(secretWord, msg.Message)
-
-		// 3. อัปเดตคำตอบของบอทลงใน Database
-		msgID := savedMsg[0]["id"].(string)
-		client.From("game_messages").Update(map[string]interface{}{
-			"answer": botAnswer,
-		}, "", "").Eq("id", msgID).Execute()
-
-		// 4. ถ้าบอทตอบว่า "ถูกต้อง" ให้จบเกม
-		if botAnswer == "ถูกต้อง" {
-			client.From("heart_games").Update(map[string]interface{}{
-				"status":   "finished",
-				"end_time": time.Now(),
-			}, "", "").Eq("id", msg.GameID).Execute()
-		}
-	}
-
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 // 4. ฟังก์ชันสำหรับคนตั้งโจทย์กดตอบ (ใช่ / ไม่ใช่ / ถูกต้อง)
