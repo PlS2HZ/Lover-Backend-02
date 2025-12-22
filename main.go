@@ -64,6 +64,107 @@ type DailyMood struct {
 	MoodText  string `json:"mood_text"`
 }
 
+// โครงสร้างข้อมูล Wishlist
+type WishlistItem struct {
+	ID          string `json:"id,omitempty"`
+	UserID      string `json:"user_id"`
+	ItemName    string `json:"item_name"`
+	Description string `json:"item_description"`
+	ItemURL     string `json:"item_url"`
+	IsReceived  bool   `json:"is_received"`
+}
+
+// โครงสร้างข้อมูล Moment
+type Moment struct {
+	ID       string `json:"id,omitempty"`
+	UserID   string `json:"user_id"`
+	ImageURL string `json:"image_url"`
+	Caption  string `json:"caption"`
+}
+
+// 1. บันทึกรูปภาพประจำวัน
+func handleSaveMoment(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	var m struct {
+		UserID    string   `json:"user_id"`
+		ImageURL  string   `json:"image_url"`
+		Caption   string   `json:"caption"`
+		VisibleTo []string `json:"visible_to"`
+	}
+	json.NewDecoder(r.Body).Decode(&m)
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	client.From("moments").Insert(m, false, "", "", "").Execute()
+
+	go func() {
+		// ✅ ส่ง PWA เฉพาะคนที่ระบุมา
+		for _, tid := range m.VisibleTo {
+			triggerPushNotification(tid, "📸 Moment ใหม่!", "แฟนของคุณเพิ่งลงรูปภาพประจำวันล่ะ! ✨")
+		}
+		sendDiscordEmbed("📸 New Moment!", "อัปโหลดรูปภาพประจำวันแล้ว", 3447003, nil, m.ImageURL)
+	}()
+	w.WriteHeader(http.StatusCreated)
+}
+
+// 2. ดึงรูปภาพทั้งหมด
+func handleGetMoments(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var results []map[string]interface{}
+	client.From("moments").Select("*", "exact", false).Order("created_at", &postgrest.OrderOpts{Ascending: false}).Limit(30, "").ExecuteTo(&results)
+	json.NewEncoder(w).Encode(results)
+}
+
+// 1. ฟังก์ชันบันทึกของที่อยากได้
+func handleSaveWishlist(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	var item struct {
+		UserID    string   `json:"user_id"`
+		ItemName  string   `json:"item_name"`
+		ItemURL   string   `json:"item_url"`
+		VisibleTo []string `json:"visible_to"`
+	}
+	json.NewDecoder(r.Body).Decode(&item)
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	client.From("wishlists").Insert(item, false, "", "", "").Execute()
+
+	go func() {
+		// ✅ ส่ง PWA เฉพาะคนที่ระบุมา
+		for _, tid := range item.VisibleTo {
+			triggerPushNotification(tid, "🎁 แฟนลงของที่อยากได้ใหม่!", "อยากได้: "+item.ItemName)
+		}
+		sendDiscordEmbed("🎁 New Wishlist!", "ของที่อยากได้: "+item.ItemName, 16753920, nil, "")
+	}()
+	w.WriteHeader(http.StatusCreated)
+}
+
+// 2. ฟังก์ชันดึงรายการทั้งหมด
+func handleGetWishlist(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	var results []map[string]interface{}
+	client.From("wishlists").Select("*", "exact", false).Order("created_at", &postgrest.OrderOpts{Ascending: false}).ExecuteTo(&results)
+	json.NewEncoder(w).Encode(results)
+}
+
+// 3. ฟังก์ชันอัปเดตว่าได้รับของแล้ว
+func handleCompleteWish(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	id := r.URL.Query().Get("id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	client.From("wishlists").Update(map[string]interface{}{"is_received": true}, "", "").Eq("id", id).Execute()
+	w.WriteHeader(http.StatusOK)
+}
+
 // --- Notification Systems ---
 
 func triggerPushNotification(userID string, title string, message string) {
@@ -511,36 +612,30 @@ func handleCheckSubscription(w http.ResponseWriter, r *http.Request) {
 }
 
 // ฟังก์ชันบันทึกอารมณ์
+// ✅ ฟังก์ชันบันทึกอารมณ์ (Mood)
 func handleSaveMood(w http.ResponseWriter, r *http.Request) {
 	if enableCORS(&w, r) {
 		return
 	}
-	var m DailyMood
+	var m struct {
+		UserID    string   `json:"user_id"`
+		MoodEmoji string   `json:"mood_emoji"`
+		MoodText  string   `json:"mood_text"`
+		VisibleTo []string `json:"visible_to"` // รับรายชื่อผู้รับ
+	}
 	json.NewDecoder(r.Body).Decode(&m)
-
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
-	// บันทึกลงฐานข้อมูล
+	// บันทึกลง DB
 	client.From("daily_moods").Insert(m, false, "", "", "").Execute()
 
-	// ✅ ส่งแจ้งเตือน PWA และ Discord
 	go func() {
-		// ดึงรายชื่อผู้ใช้ทั้งหมดเพื่อหาแฟน (สมมติว่าแฟนคือคนที่ไม่ใช่เราในระบบ 2 คน)
-		var allUsers []map[string]interface{}
-		client.From("users").Select("id", "exact", false).ExecuteTo(&allUsers)
-
-		for _, u := range allUsers {
-			targetID := u["id"].(string)
-			if targetID != m.UserID { // ส่งหาคนอื่นที่ไม่ใช่คนบันทึก
-				triggerPushNotification(targetID, "🌈 แฟนอัปเดตอารมณ์แล้ว", "ตอนนี้รู้สึก: "+m.MoodEmoji)
-			}
+		// ✅ ส่ง PWA เฉพาะคนที่ระบุมาใน VisibleTo
+		for _, tid := range m.VisibleTo {
+			triggerPushNotification(tid, "🌈 แฟนอัปเดตอารมณ์แล้ว", "ตอนนี้รู้สึก: "+m.MoodEmoji)
 		}
-
-		// ส่ง Discord
-		msg := fmt.Sprintf("แฟนอัปเดตความรู้สึก: %s\nโน้ต: %s", m.MoodEmoji, m.MoodText)
-		sendDiscordEmbed("🌈 Our Daily Mood Update!", msg, 16738740, nil, "")
+		sendDiscordEmbed("🌈 Mood Update!", "ความรู้สึก: "+m.MoodEmoji, 16738740, nil, "")
 	}()
-
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -587,6 +682,11 @@ func main() {
 	http.HandleFunc("/api/check-subscription", handleCheckSubscription)
 	http.HandleFunc("/api/save-mood", handleSaveMood) // ฟังก์ชันบันทึกอารมณ์
 	http.HandleFunc("/api/get-moods", handleGetMoods)
+	http.HandleFunc("/api/wishlist/save", handleSaveWishlist)
+	http.HandleFunc("/api/wishlist/get", handleGetWishlist)
+	http.HandleFunc("/api/wishlist/complete", handleCompleteWish)
+	http.HandleFunc("/api/moment/save", handleSaveMoment)
+	http.HandleFunc("/api/moment/get", handleGetMoments)
 
 	port := os.Getenv("PORT")
 	if port == "" {
