@@ -58,7 +58,6 @@ func main() {
 	http.HandleFunc("/api/home-config/get", handlers.HandleGetHomeConfig)
 	http.HandleFunc("/api/home-config/update", handlers.HandleUpdateHomeConfig)
 
-	http.HandleFunc("/api/game/create", handlers.HandleCreateHeartGame)
 	http.HandleFunc("/api/game/start", handlers.HandleStartHeartGame)
 	http.HandleFunc("/api/game/ask", handlers.HandleAskQuestion)
 
