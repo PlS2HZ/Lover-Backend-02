@@ -124,21 +124,30 @@ func handleSaveWishlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var item struct {
-		UserID    string   `json:"user_id"`
-		ItemName  string   `json:"item_name"`
-		ItemURL   string   `json:"item_url"`
-		VisibleTo []string `json:"visible_to"`
+		UserID      string   `json:"user_id"`
+		ItemName    string   `json:"item_name"`
+		Description string   `json:"item_description"` // เพิ่มตัวแปรรับค่า
+		ItemURL     string   `json:"item_url"`
+		VisibleTo   []string `json:"visible_to"`
 	}
 	json.NewDecoder(r.Body).Decode(&item)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	client.From("wishlists").Insert(item, false, "", "", "").Execute()
 
 	go func() {
-		// ✅ ส่ง PWA เฉพาะคนที่ระบุมา
+		fields := []map[string]interface{}{
+			{"name": "🎁 สิ่งของ", "value": item.ItemName, "inline": true},
+			{"name": "รายละเอียด", "value": item.Description, "inline": false},
+		}
+		if item.ItemURL != "" {
+			fields = append(fields, map[string]interface{}{"name": "🔗 ลิงก์สินค้า", "value": item.ItemURL, "inline": false})
+		}
+		// สีทอง 16753920
+		sendDiscordEmbed("🎁 แฟนลงของที่อยากได้ใหม่!", "ไปแอบดูหน่อยว่าแฟนอยากได้อะไรน้า~", 16753920, fields, "")
+
 		for _, tid := range item.VisibleTo {
 			triggerPushNotification(tid, "🎁 แฟนลงของที่อยากได้ใหม่!", "อยากได้: "+item.ItemName)
 		}
-		sendDiscordEmbed("🎁 New Wishlist!", "ของที่อยากได้: "+item.ItemName, 16753920, nil, "")
 	}()
 	w.WriteHeader(http.StatusCreated)
 }
@@ -621,20 +630,24 @@ func handleSaveMood(w http.ResponseWriter, r *http.Request) {
 		UserID    string   `json:"user_id"`
 		MoodEmoji string   `json:"mood_emoji"`
 		MoodText  string   `json:"mood_text"`
-		VisibleTo []string `json:"visible_to"` // รับรายชื่อผู้รับ
+		VisibleTo []string `json:"visible_to"`
 	}
 	json.NewDecoder(r.Body).Decode(&m)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-
-	// บันทึกลง DB
 	client.From("daily_moods").Insert(m, false, "", "", "").Execute()
 
 	go func() {
-		// ✅ ส่ง PWA เฉพาะคนที่ระบุมาใน VisibleTo
+		// ✅ ปรับ Discord ให้แสดง MoodText ด้วย
+		fields := []map[string]interface{}{
+			{"name": "✨ ความรู้สึก", "value": m.MoodEmoji, "inline": true},
+			{"name": "📝 บันทึก", "value": m.MoodText, "inline": false},
+		}
+		// สีชมพูพาสเทล 16744619
+		sendDiscordEmbed("🌈 แฟนอัปเดตอารมณ์ใหม่!", "วันนี้แฟนของคุณรู้สึกอย่างไรบ้างนะ?", 16744619, fields, "")
+
 		for _, tid := range m.VisibleTo {
 			triggerPushNotification(tid, "🌈 แฟนอัปเดตอารมณ์แล้ว", "ตอนนี้รู้สึก: "+m.MoodEmoji)
 		}
-		sendDiscordEmbed("🌈 Mood Update!", "ความรู้สึก: "+m.MoodEmoji, 16738740, nil, "")
 	}()
 	w.WriteHeader(http.StatusCreated)
 }
@@ -654,6 +667,39 @@ func handleGetMoods(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
+}
+
+// ลบ Mood
+func handleDeleteMood(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	id := r.URL.Query().Get("id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	client.From("daily_moods").Delete("", "").Eq("id", id).Execute()
+	w.WriteHeader(http.StatusOK)
+}
+
+// ลบ Wishlist
+func handleDeleteWishlist(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	id := r.URL.Query().Get("id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	client.From("wishlists").Delete("", "").Eq("id", id).Execute()
+	w.WriteHeader(http.StatusOK)
+}
+
+// ลบ Moment
+func handleDeleteMoment(w http.ResponseWriter, r *http.Request) {
+	if enableCORS(&w, r) {
+		return
+	}
+	id := r.URL.Query().Get("id")
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+	client.From("moments").Delete("", "").Eq("id", id).Execute()
+	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
@@ -687,6 +733,9 @@ func main() {
 	http.HandleFunc("/api/wishlist/complete", handleCompleteWish)
 	http.HandleFunc("/api/moment/save", handleSaveMoment)
 	http.HandleFunc("/api/moment/get", handleGetMoments)
+	http.HandleFunc("/api/mood/delete", handleDeleteMood)
+	http.HandleFunc("/api/wishlist/delete", handleDeleteWishlist)
+	http.HandleFunc("/api/moment/delete", handleDeleteMoment)
 
 	port := os.Getenv("PORT")
 	if port == "" {
