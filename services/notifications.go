@@ -42,6 +42,8 @@ func TriggerPushNotification(userID string, title string, message string) {
 }
 
 // ก๊อปมาจาก sendDiscordEmbed เดิม
+// services/notifications.go
+
 func SendDiscordEmbed(title, description string, color int, fields []map[string]interface{}, imageURL string) {
 	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
 	if webhookURL == "" {
@@ -49,14 +51,24 @@ func SendDiscordEmbed(title, description string, color int, fields []map[string]
 	}
 
 	embed := map[string]interface{}{
-		"title": title, "description": description, "color": color,
-		"footer": map[string]interface{}{"text": "Lover App • " + time.Now().Format("15:04")},
-		"fields": fields,
+		"title":       "💖 " + title,
+		"description": description,
+		"color":       color,
+		"fields":      fields,
+		"footer": map[string]string{
+			"text": "Lover App • " + time.Now().Format("02 Jan 15:04"),
+		},
 	}
-	if imageURL != "" && imageURL != "NULL" {
+
+	if imageURL != "" && imageURL != "null" {
 		embed["image"] = map[string]string{"url": imageURL}
 	}
-	payload := map[string]interface{}{"content": "@everyone", "embeds": []map[string]interface{}{embed}}
+
+	payload := map[string]interface{}{
+		"content": "@everyone", // แจ้งเตือนทุกคนในห้อง
+		"embeds":  []interface{}{embed},
+	}
+
 	jsonData, _ := json.Marshal(payload)
 	http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonData))
 }

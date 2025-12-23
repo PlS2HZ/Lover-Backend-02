@@ -4,6 +4,7 @@ import (
 	"couple-app/services"
 	"couple-app/utils"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -15,6 +16,8 @@ import (
 )
 
 // --- Event & Calendar ---
+// handlers/event_handlers.go
+
 func HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	if utils.EnableCORS(&w, r) {
 		return
@@ -22,9 +25,44 @@ func HandleCreateEvent(w http.ResponseWriter, r *http.Request) {
 	var ev models.Event
 	json.NewDecoder(r.Body).Decode(&ev)
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-	row := map[string]interface{}{"event_date": ev.EventDate, "title": ev.Title, "is_special": true, "category_type": ev.CategoryType, "visible_to": ev.VisibleTo}
+
+	// ✅ ต้องบันทึก CreatedBy และ VisibleTo ลงไปด้วย ข้อมูลถึงจะโชว์ในหน้าเว็บ
+	row := map[string]interface{}{
+		"event_date": ev.EventDate, "title": ev.Title, "description": ev.Description,
+		"created_by": ev.CreatedBy, "visible_to": ev.VisibleTo,
+		"repeat_type": ev.RepeatType, "category_type": ev.CategoryType,
+		"is_special": ev.CategoryType == "special",
+	}
 	client.From("events").Insert(row, false, "", "", "").Execute()
+
+	// แจ้งเตือน Discord/PWA
+	go func() {
+		msg := fmt.Sprintf("📅 **นัดหมายใหม่:** %s\n🗓️ **วันที่:** %s", ev.Title, ev.EventDate)
+		services.SendDiscordEmbed("Calendar Added!", msg, 3447003, nil, "")
+		for _, uid := range ev.VisibleTo {
+			services.TriggerPushNotification(uid, "📅 นัดหมายใหม่!", ev.Title)
+		}
+	}()
 	w.WriteHeader(http.StatusCreated)
+}
+
+func HandleDeleteEvent(w http.ResponseWriter, r *http.Request) {
+	if utils.EnableCORS(&w, r) {
+		return
+	}
+	id := r.URL.Query().Get("id")
+	title := r.URL.Query().Get("title") // ✅ รับชื่อมาโชว์ใน Discord
+
+	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
+
+	// ลบข้อมูลจากฐานข้อมูล
+	client.From("events").Delete("", "").Eq("id", id).Execute()
+
+	// ✅ ใส่แบบนี้ถูกต้องแล้วครับ ระบบจะส่งแจ้งเตือนโดยไม่รอให้การลบเสร็จ (รันเบื้องหลัง)
+	// 16729149 คือรหัสสีแดงสำหรับ Discord
+	go services.SendDiscordEmbed("Calendar Deleted", fmt.Sprintf("ลบนัดหมาย **'%s'** ออกจากปฏิทินแล้ว 🗑️", title), 16729149, nil, "")
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func HandleGetMyEvents(w http.ResponseWriter, r *http.Request) {
@@ -34,18 +72,13 @@ func HandleGetMyEvents(w http.ResponseWriter, r *http.Request) {
 	uID := r.URL.Query().Get("user_id")
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 	var data []map[string]interface{}
-	client.From("events").Select("*", "exact", false).Filter("visible_to", "cs", "{"+uID+"}").Order("event_date", &postgrest.OrderOpts{Ascending: true}).ExecuteTo(&data)
-	json.NewEncoder(w).Encode(data)
-}
 
-func HandleDeleteEvent(w http.ResponseWriter, r *http.Request) {
-	if utils.EnableCORS(&w, r) {
-		return
-	}
-	id := r.URL.Query().Get("id")
-	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
-	client.From("events").Delete("", "").Eq("id", id).Execute()
-	w.WriteHeader(http.StatusOK)
+	// ✅ แก้ไข: ให้ดึงข้อมูลที่ "เราเป็นคนสร้าง" (created_by) หรือ "มีชื่อเราในคนมองเห็น" (visible_to)
+	// ใช้ Or เพื่อความชัวร์ 100% ว่าเจ้าของต้องเห็นงานตัวเอง
+	query := fmt.Sprintf("created_by.eq.%s,visible_to.cs.{%s}", uID, uID)
+	client.From("events").Select("*", "exact", false).Or(query, "").Order("event_date", &postgrest.OrderOpts{Ascending: true}).ExecuteTo(&data)
+
+	json.NewEncoder(w).Encode(data)
 }
 
 func HandleGetHighlights(w http.ResponseWriter, r *http.Request) {
