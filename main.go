@@ -61,11 +61,9 @@ func main() {
 	http.HandleFunc("/api/game/start", handlers.HandleStartHeartGame)
 	http.HandleFunc("/api/game/ask", handlers.HandleAskQuestion)
 
-	http.HandleFunc("/api/game/answer", handlers.HandleAnswerQuestion)
-
 	http.HandleFunc("/api/game/create", handlers.HandleCreateGame)
 
-	http.HandleFunc("/api/game/invite", handlers.HandleInvitePlayer)
+	http.HandleFunc("/api/game/generate-description", handlers.HandleGenerateAIDescription)
 
 	port := os.Getenv("PORT")
 	if port == "" {
