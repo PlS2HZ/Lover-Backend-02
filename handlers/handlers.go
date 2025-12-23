@@ -588,7 +588,7 @@ func HandleAskQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var msg struct {
-		GameID   string `json:"game_id"` // ในที่นี้คือ Session ID ที่ส่งมาจากหน้า Chat
+		GameID   string `json:"game_id"`
 		SenderID string `json:"sender_id"`
 		Message  string `json:"message"`
 	}
@@ -599,21 +599,25 @@ func HandleAskQuestion(w http.ResponseWriter, r *http.Request) {
 
 	client, _ := supabase.NewClient(os.Getenv("SUPABASE_URL"), os.Getenv("SUPABASE_KEY"), nil)
 
-	// ✅ หัวใจสำคัญ: ดึง Session มาดูว่า "รอบนี้" ผู้เล่นสั่งให้ใครตอบ
 	var session []map[string]interface{}
+	// ✅ ดึงข้อมูล Session พร้อม Join โจทย์หลัก
 	client.From("game_sessions").
-		Select("*, heart_games(secret_word, host_id)", "", false).
+		Select("*, heart_games(id, secret_word, description, host_id)", "", false).
 		Eq("id", msg.GameID).
 		ExecuteTo(&session)
 
 	if len(session) > 0 {
-		// ดึงโหมดจาก Session (ผู้เล่นสามารถเปลี่ยนใจเลือกโหมดใหม่ได้ทุกครั้งที่เริ่มเล่น)
 		mode := session[0]["mode"].(string)
 		heartGame := session[0]["heart_games"].(map[string]interface{})
 		secretWord := heartGame["secret_word"].(string)
-		levelID := heartGame["id"].(string) // ID ของด่านหลัก
+		levelID := heartGame["id"].(string)
 
-		// บันทึกคำถามลงตารางข้อความ
+		description := ""
+		if heartGame["description"] != nil {
+			description = heartGame["description"].(string)
+		}
+
+		// บันทึกคำถามก่อน
 		var savedMsg []map[string]interface{}
 		client.From("game_messages").Insert(map[string]interface{}{
 			"game_id":   levelID,
@@ -625,21 +629,19 @@ func HandleAskQuestion(w http.ResponseWriter, r *http.Request) {
 			msgID := savedMsg[0]["id"].(string)
 
 			if mode == "bot" {
-				// ✅ โหมดบอท: ให้ Gemini เป็นคนวิเคราะห์และตอบ
-				botAnswer := services.AskGemini(secretWord, msg.Message)
+				// ✅ ส่งคำอธิบายไปเทรน AI
+				botAnswer := services.AskGemini(secretWord, description, msg.Message)
 				client.From("game_messages").Update(map[string]interface{}{"answer": botAnswer}, "", "").Eq("id", msgID).Execute()
 
 				if botAnswer == "ถูกต้อง" {
 					client.From("heart_games").Update(map[string]interface{}{"status": "finished"}, "", "").Eq("id", levelID).Execute()
 				}
 			} else {
-				// ✅ โหมดคน: ส่ง Notification ให้เจ้าของโจทย์มาตอบเอง
 				hostID := heartGame["host_id"].(string)
-				go services.TriggerPushNotification(hostID, "🎮 แฟนถามมาแล้ว!", "ตอบหน่อยเร็ว!")
+				go services.TriggerPushNotification(hostID, "🎮 แฟนถามมาแล้ว!", "รีบไปตอบเร็ว! ❤️")
 			}
 		}
 	}
-
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
